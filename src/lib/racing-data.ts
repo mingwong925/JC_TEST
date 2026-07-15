@@ -126,52 +126,6 @@ const horseNameZhByCode: Record<string, string> = {
   H106: "金鎧",
 };
 
-const horseHistoryIndex: Record<string, HorseHistoryRecord[]> = {
-  H123: [
-    { date: "2026-06-22", placing: 3, jockey: "A Badel" },
-    { date: "2026-06-01", placing: 2, jockey: "A Badel" },
-    { date: "2026-05-10", placing: 6, jockey: "L Hewitson" },
-  ],
-  J269: [
-    { date: "2026-06-29", placing: 5, jockey: "L Hewitson" },
-    { date: "2026-06-08", placing: 1, jockey: "L Hewitson" },
-    { date: "2026-05-18", placing: 4, jockey: "A Atzeni" },
-  ],
-  J508: [
-    { date: "2026-06-21", placing: 7, jockey: "L Ferraris" },
-    { date: "2026-06-02", placing: 2, jockey: "L Ferraris" },
-    { date: "2026-05-12", placing: 3, jockey: "H Bowman" },
-  ],
-};
-
-const drawHistoryIndex: Record<string, number[]> = {
-  H123: [2, 4, 3],
-  J269: [7, 5, 8],
-  J508: [4, 6, 5],
-  H106: [12, 11, 10],
-};
-
-const surfacePreferenceIndex: Record<string, string[]> = {
-  H123: ["GOOD", "GOOD TO FIRM"],
-  J269: ["GOOD TO FIRM"],
-  J508: ["GOOD", "YIELDING"],
-};
-
-const headToHeadIndex: Record<string, Record<string, { met: number; wins: number }>> = {
-  H123: {
-    J269: { met: 2, wins: 1 },
-    J508: { met: 1, wins: 1 },
-  },
-  J269: {
-    H123: { met: 2, wins: 1 },
-    J508: { met: 1, wins: 0 },
-  },
-  J508: {
-    H123: { met: 1, wins: 0 },
-    J269: { met: 1, wins: 1 },
-  },
-};
-
 const jockeyStats30dIndex: Record<string, RecentStats30d> = {
   "A Badel": { runs: 120, wins: 15 },
   "H Bowman": { runs: 92, wins: 11 },
@@ -382,31 +336,16 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function hashString(input: string): number {
-  let hash = 0;
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
-  }
-  return hash;
+function getRecentHistory(): HorseHistoryRecord[] {
+  // Strict mode: no synthetic/local mock history.
+  // Return empty until real historical source is connected.
+  return [];
 }
 
-function getRecentHistory(entry: HorsePrediction): HorseHistoryRecord[] {
-  if (entry.horseCode && horseHistoryIndex[entry.horseCode]) {
-    return horseHistoryIndex[entry.horseCode];
-  }
-
-  const seed = hashString(`${entry.horseCode ?? entry.horseName}|history`);
-  return [0, 1, 2].map((index) => ({
-    date: `2026-06-${String(28 - index * 7).padStart(2, "0")}`,
-    placing: ((seed >> (index * 3)) % 10) + 1,
-    jockey: index === 0 ? entry.jockey : `J-${(seed + index) % 9}`,
-  }));
-}
-
-function getRecentFormScore(entry: HorsePrediction): { score: number; previousJockey?: string } {
-  const history = getRecentHistory(entry);
+function getRecentFormScore(): { score?: number; previousJockey?: string } {
+  const history = getRecentHistory();
   if (history.length === 0) {
-    return { score: 0.5 };
+    return {};
   }
 
   const avgPlacing = history.reduce((sum, item) => sum + item.placing, 0) / history.length;
@@ -420,39 +359,11 @@ function getRecentFormScore(entry: HorsePrediction): { score: number; previousJo
 function getHeadToHeadMetrics(
   target: HorsePrediction,
   entries: HorsePrediction[],
-): { score: number; metRivalsCount: number } {
-  const targetKey = target.horseCode ?? target.horseName;
-  let metTotal = 0;
-  let winTotal = 0;
-
-  for (const rival of entries) {
-    if (rival.horseNo === target.horseNo) {
-      continue;
-    }
-
-    const rivalKey = rival.horseCode ?? rival.horseName;
-    const direct = target.horseCode ? headToHeadIndex[target.horseCode]?.[rival.horseCode ?? ""] : undefined;
-    if (direct) {
-      metTotal += direct.met;
-      winTotal += direct.wins;
-      continue;
-    }
-
-    const seed = hashString(`${targetKey}|${rivalKey}`);
-    const met = seed % 3 === 0 ? 1 : 0;
-    const wins = met === 1 ? (seed % 2) : 0;
-    metTotal += met;
-    winTotal += wins;
-  }
-
-  if (metTotal === 0) {
-    return { score: 0.5, metRivalsCount: 0 };
-  }
-
-  return {
-    score: Number(clamp01(winTotal / metTotal).toFixed(4)),
-    metRivalsCount: metTotal,
-  };
+): { score?: number; metRivalsCount: number } {
+  void target;
+  void entries;
+  // Strict mode: no synthetic/local head-to-head source.
+  return { metRivalsCount: 0 };
 }
 
 function normalizeGoing(going?: string): string {
@@ -485,40 +396,22 @@ function normalizeGoing(going?: string): string {
   return raw.toUpperCase();
 }
 
-function getDrawHistoryScore(entry: HorsePrediction): number {
-  const fallback = clamp01((14 - entry.draw) / 13);
-  if (!entry.horseCode || !drawHistoryIndex[entry.horseCode]) {
-    return Number(fallback.toFixed(4));
-  }
-
-  const avgDraw = drawHistoryIndex[entry.horseCode].reduce((sum, item) => sum + item, 0) /
-    drawHistoryIndex[entry.horseCode].length;
-  const delta = Math.abs(avgDraw - entry.draw);
-  const score = clamp01(1 - delta / 12);
-  return Number(score.toFixed(4));
+function getDrawHistoryScore(entry: HorsePrediction): number | undefined {
+  void entry;
+  // Strict mode: no synthetic/local draw history source.
+  return undefined;
 }
 
 function getDrawRangeLabel(entry: HorsePrediction): string {
-  if (entry.horseCode && drawHistoryIndex[entry.horseCode] && drawHistoryIndex[entry.horseCode].length > 0) {
-    const min = Math.min(...drawHistoryIndex[entry.horseCode]);
-    const max = Math.max(...drawHistoryIndex[entry.horseCode]);
-    return `${min}-${max}檔附近`;
-  }
-
   const min = Math.max(1, entry.draw - 1);
   const max = Math.min(14, entry.draw + 1);
   return `${min}-${max}檔附近`;
 }
 
-function getSurfaceScore(entry: HorsePrediction, going?: string): number {
+function getSurfaceScore(going?: string): number {
   const normalizedGoing = normalizeGoing(going);
   if (!normalizedGoing) {
     return 0.5;
-  }
-
-  if (entry.horseCode && surfacePreferenceIndex[entry.horseCode]) {
-    const prefers = surfacePreferenceIndex[entry.horseCode].map((item) => normalizeGoing(item));
-    return prefers.includes(normalizedGoing) ? 0.8 : 0.45;
   }
 
   return normalizedGoing.includes("GOOD") ? 0.65 : 0.5;
@@ -536,13 +429,6 @@ function getWeatherImpactScore(entry: HorsePrediction, weather?: ModelContext["w
   return Number(clamp01(base - tempPenalty - humidityPenalty - weightPenalty + 0.12).toFixed(4));
 }
 
-function getFallbackRecentStats30d(seedKey: string): RecentStats30d {
-  const seed = hashString(seedKey);
-  const runs = 25 + (seed % 75);
-  const wins = Math.max(0, Math.min(runs, Math.floor(runs * (0.06 + ((seed >> 3) % 15) / 100))));
-  return { runs, wins };
-}
-
 function getSmoothedWinRate(stats: RecentStats30d): number {
   const priorRate = 0.1;
   const priorWeight = 20;
@@ -550,19 +436,28 @@ function getSmoothedWinRate(stats: RecentStats30d): number {
   return Number(clamp01(rate).toFixed(4));
 }
 
-function getJockeyWinRate30d(entry: HorsePrediction): number {
-  const stats = jockeyStats30dIndex[entry.jockey] ?? getFallbackRecentStats30d(`jockey|${entry.jockey}`);
+function getJockeyWinRate30d(entry: HorsePrediction): number | undefined {
+  const stats = jockeyStats30dIndex[entry.jockey];
+  if (!stats) {
+    return undefined;
+  }
   return getSmoothedWinRate(stats);
 }
 
-function getTrainerWinRate30d(entry: HorsePrediction): number {
-  const stats = trainerStats30dIndex[entry.trainer] ?? getFallbackRecentStats30d(`trainer|${entry.trainer}`);
+function getTrainerWinRate30d(entry: HorsePrediction): number | undefined {
+  const stats = trainerStats30dIndex[entry.trainer];
+  if (!stats) {
+    return undefined;
+  }
   return getSmoothedWinRate(stats);
 }
 
-function getJockeyTrainerComboRate30d(entry: HorsePrediction): number {
+function getJockeyTrainerComboRate30d(entry: HorsePrediction): number | undefined {
   const key = `${entry.jockey}|${entry.trainer}`;
-  const stats = jockeyTrainerComboStats30dIndex[key] ?? getFallbackRecentStats30d(`combo|${key}`);
+  const stats = jockeyTrainerComboStats30dIndex[key];
+  if (!stats) {
+    return undefined;
+  }
   return getSmoothedWinRate(stats);
 }
 
@@ -585,34 +480,47 @@ function resolveHorseNameZh(entry: HorsePrediction): string | undefined {
 
 function buildTopFactors(entry: HorsePrediction): string[] {
   const metrics = [
-    { name: `賽績 ${Math.round((entry.recentFormScore ?? 0) * 100)}%`, score: entry.recentFormScore ?? 0 },
-    { name: `同場交手 ${Math.round((entry.headToHeadScore ?? 0) * 100)}%`, score: entry.headToHeadScore ?? 0 },
-    {
-      name: `${entry.drawRangeLabel ?? "1-14檔附近"} ${Math.round((entry.drawHistoryScore ?? 0) * 100)}%`,
-      score: entry.drawHistoryScore ?? 0,
-    },
-    { name: `場地適配 ${Math.round((entry.surfaceScore ?? 0) * 100)}%`, score: entry.surfaceScore ?? 0 },
-    {
-      name: `天氣影響 ${Math.round((entry.weatherImpactScore ?? 0) * 100)}%`,
-      score: entry.weatherImpactScore ?? 0,
-    },
-    {
-      name: `騎師近30日勝率 ${Math.round((entry.jockeyWinRate30d ?? 0) * 100)}%`,
-      score: entry.jockeyWinRate30d ?? 0,
-    },
-    {
-      name: `練馬師近30日勝率 ${Math.round((entry.trainerWinRate30d ?? 0) * 100)}%`,
-      score: entry.trainerWinRate30d ?? 0,
-    },
-    {
-      name: `騎練組合近30日勝率 ${Math.round((entry.jockeyTrainerComboRate30d ?? 0) * 100)}%`,
-      score: entry.jockeyTrainerComboRate30d ?? 0,
-    },
-    {
-      name: entry.jockeyChanged ? "騎師變更" : "同騎師維持",
-      score: entry.jockeyChangeScore ?? 0,
-    },
-  ];
+    entry.recentFormScore != null
+      ? { name: `賽績 ${Math.round(entry.recentFormScore * 100)}%`, score: entry.recentFormScore }
+      : null,
+    entry.headToHeadScore != null
+      ? { name: `同場交手 ${Math.round(entry.headToHeadScore * 100)}%`, score: entry.headToHeadScore }
+      : null,
+    entry.drawHistoryScore != null
+      ? {
+        name: `${entry.drawRangeLabel ?? "1-14檔附近"} ${Math.round(entry.drawHistoryScore * 100)}%`,
+        score: entry.drawHistoryScore,
+      }
+      : null,
+    entry.surfaceScore != null
+      ? { name: `場地適配 ${Math.round(entry.surfaceScore * 100)}%`, score: entry.surfaceScore }
+      : null,
+    entry.weatherImpactScore != null
+      ? { name: `天氣影響 ${Math.round(entry.weatherImpactScore * 100)}%`, score: entry.weatherImpactScore }
+      : null,
+    entry.jockeyWinRate30d != null
+      ? { name: `騎師近30日勝率 ${Math.round(entry.jockeyWinRate30d * 100)}%`, score: entry.jockeyWinRate30d }
+      : null,
+    entry.trainerWinRate30d != null
+      ? { name: `練馬師近30日勝率 ${Math.round(entry.trainerWinRate30d * 100)}%`, score: entry.trainerWinRate30d }
+      : null,
+    entry.jockeyTrainerComboRate30d != null
+      ? {
+        name: `騎練組合近30日勝率 ${Math.round(entry.jockeyTrainerComboRate30d * 100)}%`,
+        score: entry.jockeyTrainerComboRate30d,
+      }
+      : null,
+    entry.jockeyChangeScore != null
+      ? {
+        name: entry.jockeyChanged ? "騎師變更" : "同騎師維持",
+        score: entry.jockeyChangeScore,
+      }
+      : null,
+  ].filter((item): item is { name: string; score: number } => item != null);
+
+  if (metrics.length === 0) {
+    return ["資料不足"];
+  }
 
   return metrics
     .sort((a, b) => b.score - a.score)
@@ -634,30 +542,35 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
     return entries;
   }
 
+  const withNeutral = (value: number | undefined): number => (value == null ? 0.5 : value);
+
   const scored = entries.map((entry) => {
-    const form = getRecentFormScore(entry);
+    const form = getRecentFormScore();
     const h2h = getHeadToHeadMetrics(entry, entries);
     const jockeyChanged = Boolean(form.previousJockey && form.previousJockey !== entry.jockey);
     const jockeyChangeScore = jockeyChanged ? 0.45 : 0.55;
     const drawHistoryScore = getDrawHistoryScore(entry);
     const drawRangeLabel = getDrawRangeLabel(entry);
-    const surfaceScore = getSurfaceScore(entry, context?.going);
+    const surfaceScore = getSurfaceScore(context?.going);
     const weatherImpactScore = getWeatherImpactScore(entry, context?.weather);
     const jockeyWinRate30d = getJockeyWinRate30d(entry);
     const trainerWinRate30d = getTrainerWinRate30d(entry);
     const jockeyTrainerComboRate30d = getJockeyTrainerComboRate30d(entry);
-    const connectionScore = Number(
-      clamp01(jockeyWinRate30d * 0.4 + trainerWinRate30d * 0.4 + jockeyTrainerComboRate30d * 0.2).toFixed(4),
-    );
+    const connectionScore =
+      jockeyWinRate30d == null || trainerWinRate30d == null || jockeyTrainerComboRate30d == null
+        ? undefined
+        : Number(
+          clamp01(jockeyWinRate30d * 0.4 + trainerWinRate30d * 0.4 + jockeyTrainerComboRate30d * 0.2).toFixed(4),
+        );
     const finalScore = Number(
       (
-        form.score * 0.25 +
-        h2h.score * 0.15 +
-        jockeyChangeScore * 0.08 +
-        drawHistoryScore * 0.12 +
-        surfaceScore * 0.1 +
-        weatherImpactScore * 0.05 +
-        connectionScore * 0.25
+        withNeutral(form.score) * 0.25 +
+        withNeutral(h2h.score) * 0.15 +
+        withNeutral(jockeyChangeScore) * 0.08 +
+        withNeutral(drawHistoryScore) * 0.12 +
+        withNeutral(surfaceScore) * 0.1 +
+        withNeutral(weatherImpactScore) * 0.05 +
+        withNeutral(connectionScore) * 0.25
       ).toFixed(4),
     );
 
@@ -665,8 +578,8 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
       ...entry,
       horseNameZh: resolveHorseNameZh(entry),
       displayName: resolveHorseNameZh(entry) ?? entry.horseName,
-      recentFormScore: Number(form.score.toFixed(4)),
-      headToHeadScore: Number(h2h.score.toFixed(4)),
+      recentFormScore: form.score == null ? undefined : Number(form.score.toFixed(4)),
+      headToHeadScore: h2h.score == null ? undefined : Number(h2h.score.toFixed(4)),
       jockeyChangeScore,
       drawHistoryScore,
       drawRangeLabel,

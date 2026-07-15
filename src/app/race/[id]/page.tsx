@@ -12,6 +12,13 @@ function confidenceClass(value: "low" | "medium" | "high") {
   return "pill low";
 }
 
+function formatPercent(value?: number): string {
+  if (value == null) {
+    return "";
+  }
+  return `${(value * 100).toFixed(1)}%`;
+}
+
 export default async function RaceDetailPage({ params }: PageProps) {
   const { id } = await params;
   const race = await getRaceById(id);
@@ -76,14 +83,17 @@ export default async function RaceDetailPage({ params }: PageProps) {
                 <td>{(item.placeProb * 100).toFixed(1)}%</td>
                 <td>{item.oddsWin.toFixed(1)}</td>
                 <td>{(item.oddsPlace ?? 0).toFixed(1)}</td>
-                <td>{((item.headToHeadScore ?? 0) * 100).toFixed(1)}% ({item.metRivalsCount ?? 0})</td>
+                <td>
+                  {formatPercent(item.headToHeadScore)}
+                  {item.headToHeadScore != null ? ` (${item.metRivalsCount ?? 0})` : ""}
+                </td>
                 <td>{item.jockeyChanged ? `是 (${item.previousJockey ?? "N/A"} -> ${item.jockey})` : "否"}</td>
-                <td>{((item.drawHistoryScore ?? 0) * 100).toFixed(1)}%</td>
-                <td>{((item.surfaceScore ?? 0) * 100).toFixed(1)}%</td>
-                <td>{((item.weatherImpactScore ?? 0) * 100).toFixed(1)}%</td>
-                <td>{((item.jockeyWinRate30d ?? 0) * 100).toFixed(1)}%</td>
-                <td>{((item.trainerWinRate30d ?? 0) * 100).toFixed(1)}%</td>
-                <td>{((item.jockeyTrainerComboRate30d ?? 0) * 100).toFixed(1)}%</td>
+                <td>{formatPercent(item.drawHistoryScore)}</td>
+                <td>{formatPercent(item.surfaceScore)}</td>
+                <td>{formatPercent(item.weatherImpactScore)}</td>
+                <td>{formatPercent(item.jockeyWinRate30d)}</td>
+                <td>{formatPercent(item.trainerWinRate30d)}</td>
+                <td>{formatPercent(item.jockeyTrainerComboRate30d)}</td>
                 <td>
                   <span className={confidenceClass(item.confidence)}>{item.confidence}</span>
                 </td>
