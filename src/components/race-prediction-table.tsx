@@ -317,7 +317,6 @@ query rw_GetTrainerRanking($season: String) {
   return (
     <section className="tableWrap">
       <h2>Win/Place 預測</h2>
-      <p className="muted">賠率資料僅供參考，不參與模型計算。</p>
       <table>
         <thead>
           <tr>
