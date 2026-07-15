@@ -24,6 +24,78 @@ type RankingNode = {
 
 const HKJC_GRAPHQL = "https://info.cld.hkjc.com/graphql/base/";
 
+// Snapshot parsed from HKJC ranking pages:
+// https://racing.hkjc.com/zh-hk/local/info/jockey-ranking?season=Current&view=Numbers&racecourse=ALL
+// https://racing.hkjc.com/zh-hk/local/info/trainer-ranking?season=Current&view=Numbers&racecourse=ALL
+const JOCKEY_RATE_SNAPSHOT: Record<string, number> = {
+  潘頓: 0.2072,
+  布文: 0.109,
+  艾兆禮: 0.1054,
+  田泰安: 0.0801,
+  周俊樂: 0.0916,
+  何澤堯: 0.0872,
+  巴度: 0.0751,
+  班德禮: 0.0771,
+  霍宏聲: 0.0789,
+  奧爾民: 0.0694,
+  梁家俊: 0.0729,
+  莫雷拉: 0.1622,
+  潘明輝: 0.0565,
+  希威森: 0.0549,
+  鍾易禮: 0.0562,
+  艾道拿: 0.0494,
+  黃智弘: 0.0747,
+  楊明綸: 0.0372,
+  金誠剛: 0.0329,
+  袁幸堯: 0.1296,
+  黃寶妮: 0.0631,
+  蔡明紹: 0.0288,
+  布浩榮: 0.0687,
+  巫顯東: 0.0359,
+};
+
+const TRAINER_RATE_SNAPSHOT: Record<string, number> = {
+  方嘉柏: 0.1213,
+  沈集成: 0.1217,
+  廖康銘: 0.1071,
+  呂健威: 0.1033,
+  大衛希斯: 0.081,
+  蔡約翰: 0.0889,
+  巫偉傑: 0.0901,
+  告東尼: 0.0758,
+  姚本輝: 0.0959,
+  文家良: 0.0883,
+  羅富全: 0.071,
+  游達榮: 0.0726,
+  賀賢: 0.0755,
+  伍鵬志: 0.0588,
+  桂福特: 0.0791,
+  蘇偉賢: 0.0607,
+  黎昭昇: 0.0689,
+  韋達: 0.0564,
+  徐雨石: 0.0601,
+  葉楚航: 0.0474,
+  丁冠豪: 0.058,
+  鄭俊偉: 0.0416,
+};
+
+const JOCKEY_NAME_ALIAS: Record<string, string> = {
+  "A Badel": "巴度",
+  "H Bowman": "布文",
+  "K Teetan": "田泰安",
+  "L Hewitson": "希威森",
+  "C Y Ho": "何澤堯",
+};
+
+const TRAINER_NAME_ALIAS: Record<string, string> = {
+  "K W Lui": "呂健威",
+  "D J Hall": "賀賢",
+  "P F Yiu": "姚本輝",
+  "C S Shum": "沈集成",
+  "J Size": "蔡約翰",
+  "F C Lor": "羅富全",
+};
+
 function confidenceClass(value: Confidence) {
   if (value === "high") return "pill high";
   if (value === "medium") return "pill medium";
@@ -39,6 +111,22 @@ function formatPercent(value?: number): string {
 
 function normalizeName(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function normalizeSnapshotIndex(index: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [name, rate] of Object.entries(index)) {
+    out[normalizeName(name)] = rate;
+  }
+  return out;
+}
+
+function normalizeAliasIndex(index: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, alias] of Object.entries(index)) {
+    out[normalizeName(name)] = alias;
+  }
+  return out;
 }
 
 function pickSeasonStat(stats: RankingStat[] | undefined): { wins: number; runs: number } | undefined {
@@ -103,8 +191,12 @@ function getComboRate(jockeyRate?: number, trainerRate?: number): number | undef
 }
 
 export default function RacePredictionTable({ predictions }: Props) {
-  const [jockeyRateIndex, setJockeyRateIndex] = useState<Record<string, number>>({});
-  const [trainerRateIndex, setTrainerRateIndex] = useState<Record<string, number>>({});
+  const [jockeyRateIndex, setJockeyRateIndex] = useState<Record<string, number>>(() =>
+    normalizeSnapshotIndex(JOCKEY_RATE_SNAPSHOT),
+  );
+  const [trainerRateIndex, setTrainerRateIndex] = useState<Record<string, number>>(() =>
+    normalizeSnapshotIndex(TRAINER_RATE_SNAPSHOT),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -196,11 +288,28 @@ query rw_GetTrainerRanking($season: String) {
     };
   }, []);
 
+  const jockeyAliasIndex = useMemo(() => normalizeAliasIndex(JOCKEY_NAME_ALIAS), []);
+  const trainerAliasIndex = useMemo(() => normalizeAliasIndex(TRAINER_NAME_ALIAS), []);
+
+  const lookupRate = (name: string, index: Record<string, number>, aliasIndex: Record<string, string>): number | undefined => {
+    const key = normalizeName(name);
+    if (index[key] != null) {
+      return index[key];
+    }
+
+    const alias = aliasIndex[key];
+    if (!alias) {
+      return undefined;
+    }
+
+    return index[normalizeName(alias)];
+  };
+
   const enriched = useMemo(
     () =>
       predictions.map((item) => {
-        const jockeyRate = item.jockeyWinRate ?? jockeyRateIndex[normalizeName(item.jockey)];
-        const trainerRate = item.trainerWinRate ?? trainerRateIndex[normalizeName(item.trainer)];
+        const jockeyRate = item.jockeyWinRate ?? lookupRate(item.jockey, jockeyRateIndex, jockeyAliasIndex);
+        const trainerRate = item.trainerWinRate ?? lookupRate(item.trainer, trainerRateIndex, trainerAliasIndex);
         const comboRate = item.jockeyTrainerComboRate ?? getComboRate(jockeyRate, trainerRate);
 
         return {
@@ -210,7 +319,7 @@ query rw_GetTrainerRanking($season: String) {
           comboRate,
         };
       }),
-    [predictions, jockeyRateIndex, trainerRateIndex],
+    [predictions, jockeyRateIndex, trainerRateIndex, jockeyAliasIndex, trainerAliasIndex],
   );
 
   return (
