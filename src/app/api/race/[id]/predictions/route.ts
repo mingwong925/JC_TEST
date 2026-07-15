@@ -14,9 +14,6 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     modelVersion: "feature-v3-no-odds",
     featureSet: [
       "recentForm",
-      "headToHead",
-      "jockeyChange",
-      "drawHistory",
       "surface",
       "weather",
       "jockeyWinRate",
