@@ -144,6 +144,11 @@ type RaceCardRunner = {
   rating: number;
 };
 
+type LiveWinPlaceOdds = {
+  winByNo: Map<number, number>;
+  placeByNo: Map<number, number>;
+};
+
 const horseNameZhByCode: Record<string, string> = {
   H123: "美麗導彈",
   J269: "龍之晨",
@@ -1034,6 +1039,103 @@ async function fetchRaceTimeById(parsed: { date: string; course: "ST" | "HV"; ra
   return extractRaceTime(html);
 }
 
+function parseOddsValue(raw: string | undefined): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const n = Number(raw.replace(/,/g, ""));
+  if (!Number.isFinite(n) || n <= 0) {
+    return undefined;
+  }
+  return n;
+}
+
+async function fetchLiveWinPlaceOddsByRace(parsed: {
+  date: string;
+  course: "ST" | "HV";
+  raceNo: number;
+}): Promise<LiveWinPlaceOdds> {
+  const query = `
+query racing($date: String, $venueCode: String, $oddsTypes: [OddsType], $raceNo: Int) {
+  raceMeetings(date: $date, venueCode: $venueCode) {
+    pmPools(oddsTypes: $oddsTypes, raceNo: $raceNo) {
+      oddsType
+      oddsNodes {
+        combString
+        oddsValue
+      }
+    }
+  }
+}
+`;
+
+  type Payload = {
+    data?: {
+      raceMeetings?: Array<{
+        pmPools?: Array<{
+          oddsType?: string;
+          oddsNodes?: Array<{
+            combString?: string;
+            oddsValue?: string;
+          }>;
+        }>;
+      }>;
+    };
+  };
+
+  const response = await fetch(HKJC_LOCAL_GRAPHQL_BASE, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json",
+      "user-agent": "Mozilla/5.0 (compatible; JC-TEST-MVP/1.0)",
+    },
+    body: JSON.stringify({
+      operationName: "racing",
+      variables: {
+        date: parsed.date,
+        venueCode: parsed.course,
+        raceNo: parsed.raceNo,
+        oddsTypes: ["WIN", "PLA"],
+      },
+      query,
+    }),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Live odds request failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as Payload;
+  const winByNo = new Map<number, number>();
+  const placeByNo = new Map<number, number>();
+
+  const pools = payload?.data?.raceMeetings?.[0]?.pmPools ?? [];
+  for (const pool of pools) {
+    const oddsType = (pool.oddsType ?? "").toUpperCase();
+    if (oddsType !== "WIN" && oddsType !== "PLA") {
+      continue;
+    }
+
+    for (const node of pool.oddsNodes ?? []) {
+      const horseNo = parseNumber(node.combString, Number.NaN);
+      const odds = parseOddsValue(node.oddsValue);
+      if (!Number.isFinite(horseNo) || odds == null) {
+        continue;
+      }
+
+      if (oddsType === "WIN") {
+        winByNo.set(horseNo, odds);
+      } else {
+        placeByNo.set(horseNo, odds);
+      }
+    }
+  }
+
+  return { winByNo, placeByNo };
+}
+
 async function fetchEntriesRaceMetaByDate(date: string): Promise<{ course: "ST" | "HV"; races: EntryRaceMeta[] } | undefined> {
   const url = `${HKJC_ENTRIES_BASE}?RaceDate=${formatDateForHkjc(date)}`;
   const html = await fetchText(url);
@@ -1229,6 +1331,22 @@ async function fetchHkjcRaceById(id: string): Promise<Race | undefined> {
     if (!dedupMap.has(entry.horseNo)) {
       dedupMap.set(entry.horseNo, entry);
     }
+  }
+
+  try {
+    const liveOdds = await fetchLiveWinPlaceOddsByRace(parsed);
+    for (const entry of dedupMap.values()) {
+      const winOdds = liveOdds.winByNo.get(entry.horseNo);
+      const placeOdds = liveOdds.placeByNo.get(entry.horseNo);
+      if (winOdds != null) {
+        entry.oddsWin = winOdds;
+      }
+      if (placeOdds != null) {
+        entry.oddsPlace = placeOdds;
+      }
+    }
+  } catch {
+    // Keep existing odds as fallback when live WIN/PLA API is temporarily unavailable.
   }
 
   await refreshLiveConnectionStats();
