@@ -456,7 +456,33 @@ function getHeadToHeadMetrics(
 }
 
 function normalizeGoing(going?: string): string {
-  return (going ?? "").toUpperCase().replace(/\s+/g, " ").trim();
+  const raw = (going ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) {
+    return "";
+  }
+
+  const zhMap: Record<string, string> = {
+    好地: "GOOD",
+    快地: "FIRM",
+    好快地: "GOOD TO FIRM",
+    好地至快地: "GOOD TO FIRM",
+    好地至快快地: "GOOD TO FIRM",
+    黏地: "YIELDING",
+    好黏地: "GOOD TO YIELDING",
+    好地至黏地: "GOOD TO YIELDING",
+    軟地: "SOFT",
+    泥快地: "FAST",
+    泥好地: "GOOD",
+    泥黏地: "SLOW",
+    濕快地: "WET FAST",
+    慢地: "SLOW",
+  };
+
+  if (zhMap[raw]) {
+    return zhMap[raw];
+  }
+
+  return raw.toUpperCase();
 }
 
 function getDrawHistoryScore(entry: HorsePrediction): number {
