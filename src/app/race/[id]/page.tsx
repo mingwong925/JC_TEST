@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getOddsTrendByRaceId, getPredictionsByRaceId, getRaceById } from "@/lib/racing-data";
+import { getPredictionsByRaceId, getRaceById } from "@/lib/racing-data";
 
 type PageProps = {
   params: Promise<{ id: string }>;
@@ -28,7 +28,6 @@ export default async function RaceDetailPage({ params }: PageProps) {
   }
 
   const predictions = await getPredictionsByRaceId(id);
-  const trend = await getOddsTrendByRaceId(id);
 
   return (
     <main className="shell">
@@ -60,7 +59,6 @@ export default async function RaceDetailPage({ params }: PageProps) {
               <th>同場交手</th>
               <th>騎師變更</th>
               <th>檔位歷史</th>
-              <th>場地適配</th>
               <th>天氣影響</th>
               <th>騎師近30日勝率</th>
               <th>練馬師近30日勝率</th>
@@ -87,9 +85,8 @@ export default async function RaceDetailPage({ params }: PageProps) {
                   {formatPercent(item.headToHeadScore)}
                   {item.headToHeadScore != null ? ` (${item.metRivalsCount ?? 0})` : ""}
                 </td>
-                <td>{item.jockeyChanged ? `是 (${item.previousJockey ?? "N/A"} -> ${item.jockey})` : "否"}</td>
+                <td>{item.jockeyChanged ? `是 (${item.previousJockey ?? "N/A"} -> ${item.jockey})` : ""}</td>
                 <td>{formatPercent(item.drawHistoryScore)}</td>
-                <td>{formatPercent(item.surfaceScore)}</td>
                 <td>{formatPercent(item.weatherImpactScore)}</td>
                 <td>{formatPercent(item.jockeyWinRate30d)}</td>
                 <td>{formatPercent(item.trainerWinRate30d)}</td>
@@ -102,18 +99,6 @@ export default async function RaceDetailPage({ params }: PageProps) {
             ))}
           </tbody>
         </table>
-      </section>
-
-      <section className="card">
-        <h2>賠率快照趨勢</h2>
-        <p className="muted">顯示 T-60 / T-30 / T-10 分鐘的簡易檢查點（僅供參考，不參與模型計算）。</p>
-        <ul className="trendList">
-          {trend.map((point) => (
-            <li key={`${point.horseNo}-${point.t}`}>
-              馬匹 {point.horseNo} • {point.t} • 賠率 {point.odds}
-            </li>
-          ))}
-        </ul>
       </section>
 
       <section className="disclaimer">

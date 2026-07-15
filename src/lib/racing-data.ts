@@ -72,6 +72,8 @@ const HKJC_ZH_BASE = "https://racing.hkjc.com/zh-hk/local/information/localresul
 const HKJC_ENTRIES_BASE = "https://racing.hkjc.com/en-us/local/information/entries";
 const HKJC_RACECARD_BASE = "https://racing.hkjc.com/en-us/local/information/racecard";
 const HKJC_ZH_RACECARD_BASE = "https://racing.hkjc.com/zh-hk/local/information/racecard";
+const HKJC_JOCKEY_STANDINGS_BASE = "https://racing.hkjc.com/racing/information/English/Jockey/JockeyRanking.aspx";
+const HKJC_TRAINER_STANDINGS_BASE = "https://racing.hkjc.com/racing/information/English/Trainers/TrainerRanking.aspx";
 const HKO_BASE = process.env.HKO_BASE_URL ?? "https://data.weather.gov.hk/weatherAPI/opendata/weather.php";
 const USE_MOCK_DATA = process.env.USE_MOCK_DATA === "true";
 const USE_LIVE_HKJC = process.env.USE_LIVE_HKJC !== "false";
@@ -126,35 +128,9 @@ const horseNameZhByCode: Record<string, string> = {
   H106: "金鎧",
 };
 
-const jockeyStats30dIndex: Record<string, RecentStats30d> = {
-  "A Badel": { runs: 120, wins: 15 },
-  "H Bowman": { runs: 92, wins: 11 },
-  "K Teetan": { runs: 107, wins: 10 },
-  "L Hewitson": { runs: 115, wins: 12 },
-  "R Kingscote": { runs: 45, wins: 4 },
-  "C Y Ho": { runs: 98, wins: 9 },
-  "L Ferraris": { runs: 101, wins: 8 },
-};
-
-const trainerStats30dIndex: Record<string, RecentStats30d> = {
-  "K W Lui": { runs: 84, wins: 12 },
-  "D J Hall": { runs: 78, wins: 7 },
-  "P F Yiu": { runs: 80, wins: 6 },
-  "C S Shum": { runs: 76, wins: 5 },
-  "J Size": { runs: 93, wins: 14 },
-  "F C Lor": { runs: 81, wins: 8 },
-  "D Eustace": { runs: 75, wins: 6 },
-};
-
-const jockeyTrainerComboStats30dIndex: Record<string, RecentStats30d> = {
-  "A Badel|K W Lui": { runs: 16, wins: 3 },
-  "H Bowman|D J Hall": { runs: 12, wins: 2 },
-  "K Teetan|P F Yiu": { runs: 14, wins: 1 },
-  "L Hewitson|C S Shum": { runs: 13, wins: 1 },
-  "R Kingscote|J Size": { runs: 9, wins: 2 },
-  "C Y Ho|F C Lor": { runs: 11, wins: 2 },
-  "L Ferraris|D Eustace": { runs: 10, wins: 1 },
-};
+const jockeyStatsLiveIndex: Record<string, RecentStats30d> = {};
+const trainerStatsLiveIndex: Record<string, RecentStats30d> = {};
+const jockeyTrainerComboLiveIndex: Record<string, RecentStats30d> = {};
 
 export function getHongKongDateString(date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -417,6 +393,76 @@ function getSurfaceScore(going?: string): number {
   return normalizedGoing.includes("GOOD") ? 0.65 : 0.5;
 }
 
+function normalizePersonName(name: string): string {
+  return name.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function parseStandingsStats(html: string): Record<string, RecentStats30d> {
+  const $ = cheerio.load(html);
+  const result: Record<string, RecentStats30d> = {};
+
+  $("tr").each((_, tr) => {
+    const cells = $(tr)
+      .find("td")
+      .map((__, td) => $(td).text().replace(/\s+/g, " ").trim())
+      .get();
+
+    if (cells.length < 6) {
+      return;
+    }
+
+    const name = cells.find((item) => /[A-Za-z]/.test(item) && item.length >= 3);
+    if (!name) {
+      return;
+    }
+
+    const numbers = cells
+      .map((cell) => parseNumber(cell, Number.NaN))
+      .filter((value) => Number.isFinite(value));
+
+    if (numbers.length < 2) {
+      return;
+    }
+
+    const runs = Number(numbers[numbers.length - 2]);
+    const wins = Number(numbers[numbers.length - 1]);
+    if (!Number.isFinite(runs) || !Number.isFinite(wins) || runs <= 0 || wins < 0 || wins > runs) {
+      return;
+    }
+
+    result[normalizePersonName(name)] = { runs, wins };
+  });
+
+  return result;
+}
+
+async function refreshLiveConnectionStats(): Promise<void> {
+  try {
+    const [jockeyHtml, trainerHtml] = await Promise.all([
+      fetchText(HKJC_JOCKEY_STANDINGS_BASE),
+      fetchText(HKJC_TRAINER_STANDINGS_BASE),
+    ]);
+
+    const jockeyParsed = parseStandingsStats(jockeyHtml);
+    const trainerParsed = parseStandingsStats(trainerHtml);
+
+    for (const key of Object.keys(jockeyStatsLiveIndex)) {
+      delete jockeyStatsLiveIndex[key];
+    }
+    for (const key of Object.keys(trainerStatsLiveIndex)) {
+      delete trainerStatsLiveIndex[key];
+    }
+    for (const key of Object.keys(jockeyTrainerComboLiveIndex)) {
+      delete jockeyTrainerComboLiveIndex[key];
+    }
+
+    Object.assign(jockeyStatsLiveIndex, jockeyParsed);
+    Object.assign(trainerStatsLiveIndex, trainerParsed);
+  } catch {
+    // strict mode: if fetch fails keep indices empty instead of fake fallback
+  }
+}
+
 function getWeatherImpactScore(entry: HorsePrediction, weather?: ModelContext["weather"]): number {
   if (!weather || weather.temperatureC == null || weather.humidity == null) {
     return 0.5;
@@ -437,7 +483,7 @@ function getSmoothedWinRate(stats: RecentStats30d): number {
 }
 
 function getJockeyWinRate30d(entry: HorsePrediction): number | undefined {
-  const stats = jockeyStats30dIndex[entry.jockey];
+  const stats = jockeyStatsLiveIndex[normalizePersonName(entry.jockey)];
   if (!stats) {
     return undefined;
   }
@@ -445,7 +491,7 @@ function getJockeyWinRate30d(entry: HorsePrediction): number | undefined {
 }
 
 function getTrainerWinRate30d(entry: HorsePrediction): number | undefined {
-  const stats = trainerStats30dIndex[entry.trainer];
+  const stats = trainerStatsLiveIndex[normalizePersonName(entry.trainer)];
   if (!stats) {
     return undefined;
   }
@@ -453,8 +499,8 @@ function getTrainerWinRate30d(entry: HorsePrediction): number | undefined {
 }
 
 function getJockeyTrainerComboRate30d(entry: HorsePrediction): number | undefined {
-  const key = `${entry.jockey}|${entry.trainer}`;
-  const stats = jockeyTrainerComboStats30dIndex[key];
+  const key = `${normalizePersonName(entry.jockey)}|${normalizePersonName(entry.trainer)}`;
+  const stats = jockeyTrainerComboLiveIndex[key];
   if (!stats) {
     return undefined;
   }
@@ -492,9 +538,6 @@ function buildTopFactors(entry: HorsePrediction): string[] {
         score: entry.drawHistoryScore,
       }
       : null,
-    entry.surfaceScore != null
-      ? { name: `場地適配 ${Math.round(entry.surfaceScore * 100)}%`, score: entry.surfaceScore }
-      : null,
     entry.weatherImpactScore != null
       ? { name: `天氣影響 ${Math.round(entry.weatherImpactScore * 100)}%`, score: entry.weatherImpactScore }
       : null,
@@ -510,11 +553,8 @@ function buildTopFactors(entry: HorsePrediction): string[] {
         score: entry.jockeyTrainerComboRate30d,
       }
       : null,
-    entry.jockeyChangeScore != null
-      ? {
-        name: entry.jockeyChanged ? "騎師變更" : "同騎師維持",
-        score: entry.jockeyChangeScore,
-      }
+    entry.jockeyChangeScore != null && entry.jockeyChanged
+      ? { name: "騎師變更", score: entry.jockeyChangeScore }
       : null,
   ].filter((item): item is { name: string; score: number } => item != null);
 
@@ -955,6 +995,8 @@ async function fetchHkjcRaceById(id: string): Promise<Race | undefined> {
     }
   }
 
+  await refreshLiveConnectionStats();
+
   const entries = applyFeatureModel(Array.from(dedupMap.values()), {
     going,
     weather: weatherContext,
@@ -1138,21 +1180,6 @@ export async function getPredictionsByRaceId(id: string): Promise<HorsePredictio
   }
 
   return [...race.entries].sort((a, b) => b.winProb - a.winProb);
-}
-
-export async function getOddsTrendByRaceId(
-  id: string,
-): Promise<Array<{ t: string; horseNo: number; odds: number }>> {
-  const race = await getRaceById(id);
-  if (!race) {
-    return [];
-  }
-
-  return race.entries.flatMap((entry) => [
-    { t: "T-60", horseNo: entry.horseNo, odds: Number((entry.oddsWin * 1.12).toFixed(2)) },
-    { t: "T-30", horseNo: entry.horseNo, odds: Number((entry.oddsWin * 1.05).toFixed(2)) },
-    { t: "T-10", horseNo: entry.horseNo, odds: entry.oddsWin },
-  ]);
 }
 
 export async function getDataLatencyStatus() {
