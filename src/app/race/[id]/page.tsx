@@ -60,9 +60,9 @@ export default async function RaceDetailPage({ params }: PageProps) {
               <th>騎師變更</th>
               <th>檔位歷史</th>
               <th>天氣影響</th>
-              <th>騎師近30日勝率</th>
-              <th>練馬師近30日勝率</th>
-              <th>騎練近30日勝率</th>
+              <th>騎師本季勝率</th>
+              <th>練馬師本季勝率</th>
+              <th>騎練本季勝率</th>
               <th>信心等級</th>
               <th>主要因子</th>
             </tr>
@@ -88,9 +88,9 @@ export default async function RaceDetailPage({ params }: PageProps) {
                 <td>{item.jockeyChanged ? `是 (${item.previousJockey ?? "N/A"} -> ${item.jockey})` : ""}</td>
                 <td>{formatPercent(item.drawHistoryScore)}</td>
                 <td>{formatPercent(item.weatherImpactScore)}</td>
-                <td>{formatPercent(item.jockeyWinRate30d)}</td>
-                <td>{formatPercent(item.trainerWinRate30d)}</td>
-                <td>{formatPercent(item.jockeyTrainerComboRate30d)}</td>
+                <td>{formatPercent(item.jockeyWinRate)}</td>
+                <td>{formatPercent(item.trainerWinRate)}</td>
+                <td>{formatPercent(item.jockeyTrainerComboRate)}</td>
                 <td>
                   <span className={confidenceClass(item.confidence)}>{item.confidence}</span>
                 </td>

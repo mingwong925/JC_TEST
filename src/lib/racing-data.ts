@@ -19,9 +19,9 @@ export type HorsePrediction = {
   drawHistoryScore?: number;
   surfaceScore?: number;
   weatherImpactScore?: number;
-  jockeyWinRate30d?: number;
-  trainerWinRate30d?: number;
-  jockeyTrainerComboRate30d?: number;
+  jockeyWinRate?: number;
+  trainerWinRate?: number;
+  jockeyTrainerComboRate?: number;
   connectionScore?: number;
   finalScore?: number;
   metRivalsCount?: number;
@@ -87,7 +87,7 @@ type HorseHistoryRecord = {
   jockey: string;
 };
 
-type RecentStats30d = {
+type RecentStats = {
   runs: number;
   wins: number;
 };
@@ -150,9 +150,9 @@ const horseNameZhByCode: Record<string, string> = {
   H106: "金鎧",
 };
 
-const jockeyStatsLiveIndex: Record<string, RecentStats30d> = {};
-const trainerStatsLiveIndex: Record<string, RecentStats30d> = {};
-const jockeyTrainerComboLiveIndex: Record<string, RecentStats30d> = {};
+const jockeyStatsLiveIndex: Record<string, RecentStats> = {};
+const trainerStatsLiveIndex: Record<string, RecentStats> = {};
+const jockeyTrainerComboLiveIndex: Record<string, RecentStats> = {};
 
 export function getHongKongDateString(date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -419,9 +419,9 @@ function normalizePersonName(name: string): string {
   return name.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-function parseStandingsStatsFromHtml(html: string): Record<string, RecentStats30d> {
+function parseStandingsStatsFromHtml(html: string): Record<string, RecentStats> {
   const $ = cheerio.load(html);
-  const result: Record<string, RecentStats30d> = {};
+  const result: Record<string, RecentStats> = {};
 
   $("tr").each((_, tr) => {
     const cells = $(tr)
@@ -450,7 +450,7 @@ function parseStandingsStatsFromHtml(html: string): Record<string, RecentStats30
   return result;
 }
 
-function pickAggregateSeasonStat(stats: HkjcRankingStatNode[] | undefined): RecentStats30d | undefined {
+function pickAggregateSeasonStat(stats: HkjcRankingStatNode[] | undefined): RecentStats | undefined {
   if (!stats || stats.length === 0) {
     return undefined;
   }
@@ -477,8 +477,8 @@ function pickAggregateSeasonStat(stats: HkjcRankingStatNode[] | undefined): Rece
   return byRuns ? { wins: byRuns.wins, runs: byRuns.runs } : undefined;
 }
 
-function parseJockeyStatsFromGraphql(nodes: HkjcJockeyNode[] | undefined): Record<string, RecentStats30d> {
-  const result: Record<string, RecentStats30d> = {};
+function parseJockeyStatsFromGraphql(nodes: HkjcJockeyNode[] | undefined): Record<string, RecentStats> {
+  const result: Record<string, RecentStats> = {};
   if (!nodes || nodes.length === 0) {
     return result;
   }
@@ -498,8 +498,8 @@ function parseJockeyStatsFromGraphql(nodes: HkjcJockeyNode[] | undefined): Recor
   return result;
 }
 
-function parseTrainerStatsFromGraphql(nodes: HkjcTrainerNode[] | undefined): Record<string, RecentStats30d> {
-  const result: Record<string, RecentStats30d> = {};
+function parseTrainerStatsFromGraphql(nodes: HkjcTrainerNode[] | undefined): Record<string, RecentStats> {
+  const result: Record<string, RecentStats> = {};
   if (!nodes || nodes.length === 0) {
     return result;
   }
@@ -665,14 +665,14 @@ function getWeatherImpactScore(entry: HorsePrediction, weather?: ModelContext["w
   return Number(clamp01(base - tempPenalty - humidityPenalty - weightPenalty + 0.12).toFixed(4));
 }
 
-function getSmoothedWinRate(stats: RecentStats30d): number {
+function getSmoothedWinRate(stats: RecentStats): number {
   const priorRate = 0.1;
   const priorWeight = 20;
   const rate = (stats.wins + priorRate * priorWeight) / (stats.runs + priorWeight);
   return Number(clamp01(rate).toFixed(4));
 }
 
-function getJockeyWinRate30d(entry: HorsePrediction): number | undefined {
+function getJockeyWinRate(entry: HorsePrediction): number | undefined {
   const stats = jockeyStatsLiveIndex[normalizePersonName(entry.jockey)];
   if (!stats) {
     return undefined;
@@ -680,7 +680,7 @@ function getJockeyWinRate30d(entry: HorsePrediction): number | undefined {
   return getSmoothedWinRate(stats);
 }
 
-function getTrainerWinRate30d(entry: HorsePrediction): number | undefined {
+function getTrainerWinRate(entry: HorsePrediction): number | undefined {
   const stats = trainerStatsLiveIndex[normalizePersonName(entry.trainer)];
   if (!stats) {
     return undefined;
@@ -688,7 +688,7 @@ function getTrainerWinRate30d(entry: HorsePrediction): number | undefined {
   return getSmoothedWinRate(stats);
 }
 
-function getJockeyTrainerComboRate30d(entry: HorsePrediction): number | undefined {
+function getJockeyTrainerComboRate(entry: HorsePrediction): number | undefined {
   const key = `${normalizePersonName(entry.jockey)}|${normalizePersonName(entry.trainer)}`;
   const stats = jockeyTrainerComboLiveIndex[key];
   if (!stats) {
@@ -731,16 +731,16 @@ function buildTopFactors(entry: HorsePrediction): string[] {
     entry.weatherImpactScore != null
       ? { name: `天氣影響 ${Math.round(entry.weatherImpactScore * 100)}%`, score: entry.weatherImpactScore }
       : null,
-    entry.jockeyWinRate30d != null
-      ? { name: `騎師近30日勝率 ${Math.round(entry.jockeyWinRate30d * 100)}%`, score: entry.jockeyWinRate30d }
+    entry.jockeyWinRate != null
+      ? { name: `騎師本季勝率 ${Math.round(entry.jockeyWinRate * 100)}%`, score: entry.jockeyWinRate }
       : null,
-    entry.trainerWinRate30d != null
-      ? { name: `練馬師近30日勝率 ${Math.round(entry.trainerWinRate30d * 100)}%`, score: entry.trainerWinRate30d }
+    entry.trainerWinRate != null
+      ? { name: `練馬師本季勝率 ${Math.round(entry.trainerWinRate * 100)}%`, score: entry.trainerWinRate }
       : null,
-    entry.jockeyTrainerComboRate30d != null
+    entry.jockeyTrainerComboRate != null
       ? {
-        name: `騎練組合近30日勝率 ${Math.round(entry.jockeyTrainerComboRate30d * 100)}%`,
-        score: entry.jockeyTrainerComboRate30d,
+        name: `騎練本季勝率 ${Math.round(entry.jockeyTrainerComboRate * 100)}%`,
+        score: entry.jockeyTrainerComboRate,
       }
       : null,
     entry.jockeyChangeScore != null && entry.jockeyChanged
@@ -783,14 +783,14 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
     const drawRangeLabel = getDrawRangeLabel(entry);
     const surfaceScore = getSurfaceScore(context?.going);
     const weatherImpactScore = getWeatherImpactScore(entry, context?.weather);
-    const jockeyWinRate30d = getJockeyWinRate30d(entry);
-    const trainerWinRate30d = getTrainerWinRate30d(entry);
-    const jockeyTrainerComboRate30d = getJockeyTrainerComboRate30d(entry);
+    const jockeyWinRate = getJockeyWinRate(entry);
+    const trainerWinRate = getTrainerWinRate(entry);
+    const jockeyTrainerComboRate = getJockeyTrainerComboRate(entry);
     const connectionScore =
-      jockeyWinRate30d == null || trainerWinRate30d == null || jockeyTrainerComboRate30d == null
+      jockeyWinRate == null || trainerWinRate == null || jockeyTrainerComboRate == null
         ? undefined
         : Number(
-          clamp01(jockeyWinRate30d * 0.4 + trainerWinRate30d * 0.4 + jockeyTrainerComboRate30d * 0.2).toFixed(4),
+          clamp01(jockeyWinRate * 0.4 + trainerWinRate * 0.4 + jockeyTrainerComboRate * 0.2).toFixed(4),
         );
     const finalScore = Number(
       (
@@ -815,9 +815,9 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
       drawRangeLabel,
       surfaceScore,
       weatherImpactScore,
-      jockeyWinRate30d,
-      trainerWinRate30d,
-      jockeyTrainerComboRate30d,
+      jockeyWinRate,
+      trainerWinRate,
+      jockeyTrainerComboRate,
       connectionScore,
       metRivalsCount: h2h.metRivalsCount,
       jockeyChanged,
