@@ -1,0 +1,1314 @@
+import * as cheerio from "cheerio";
+
+export type HorsePrediction = {
+  horseNo: number;
+  horseCode?: string;
+  horseName: string;
+  horseNameZh?: string;
+  displayName?: string;
+  jockey: string;
+  trainer: string;
+  draw: number;
+  weight: number;
+  oddsWin: number;
+  oddsPlace?: number;
+  recentFormScore?: number;
+  headToHeadScore?: number;
+  oddsScore?: number;
+  jockeyChangeScore?: number;
+  drawHistoryScore?: number;
+  surfaceScore?: number;
+  weatherImpactScore?: number;
+  jockeyWinRate30d?: number;
+  trainerWinRate30d?: number;
+  jockeyTrainerComboRate30d?: number;
+  connectionScore?: number;
+  finalScore?: number;
+  metRivalsCount?: number;
+  jockeyChanged?: boolean;
+  previousJockey?: string;
+  drawRangeLabel?: string;
+  winProb: number;
+  placeProb: number;
+  confidence: "low" | "medium" | "high";
+  factors: string[];
+};
+
+export type Race = {
+  id: string;
+  date: string;
+  course: "ST" | "HV";
+  raceNo: number;
+  className: string;
+  distanceM: number;
+  raceTime?: string;
+  going: string;
+  updatedAt: string;
+  entries: HorsePrediction[];
+};
+
+type WeatherCurrent = {
+  source: "hko" | "mock";
+  updateTime: string;
+  temperatureC: number | null;
+  humidity: number | null;
+  icon: number | null;
+};
+
+type NineDayForecast = {
+  source: "hko" | "mock";
+  updateTime: string;
+  days: Array<{
+    date: string;
+    week: string;
+    minTempC: number;
+    maxTempC: number;
+    weather: string;
+  }>;
+};
+
+const HKJC_BASE = "https://racing.hkjc.com/en-us/local/information/localresults";
+const HKJC_ZH_BASE = "https://racing.hkjc.com/zh-hk/local/information/localresults";
+const HKJC_ENTRIES_BASE = "https://racing.hkjc.com/en-us/local/information/entries";
+const HKJC_RACECARD_BASE = "https://racing.hkjc.com/en-us/local/information/racecard";
+const HKJC_ZH_RACECARD_BASE = "https://racing.hkjc.com/zh-hk/local/information/racecard";
+const HKO_BASE = process.env.HKO_BASE_URL ?? "https://data.weather.gov.hk/weatherAPI/opendata/weather.php";
+const USE_MOCK_DATA = process.env.USE_MOCK_DATA === "true";
+const USE_LIVE_HKJC = process.env.USE_LIVE_HKJC !== "false";
+
+type HorseHistoryRecord = {
+  date: string;
+  placing: number;
+  jockey: string;
+};
+
+type RecentStats30d = {
+  runs: number;
+  wins: number;
+};
+
+type ModelContext = {
+  going?: string;
+  weather?: {
+    temperatureC: number | null;
+    humidity: number | null;
+  };
+};
+
+type EntryRaceMeta = {
+  raceNo: number;
+  className: string;
+  distanceM: number;
+};
+
+type RaceCardMeta = {
+  className: string;
+  distanceM: number;
+  raceTime?: string;
+  going: string;
+};
+
+type RaceCardRunner = {
+  horseNo: number;
+  horseCode?: string;
+  horseNameZh: string;
+  jockey: string;
+  trainer: string;
+  draw: number;
+  weight: number;
+  rating: number;
+};
+
+const horseNameZhByCode: Record<string, string> = {
+  H123: "美麗導彈",
+  J269: "龍之晨",
+  J508: "凱旋勇士",
+  H106: "金鎧",
+};
+
+const horseHistoryIndex: Record<string, HorseHistoryRecord[]> = {
+  H123: [
+    { date: "2026-06-22", placing: 3, jockey: "A Badel" },
+    { date: "2026-06-01", placing: 2, jockey: "A Badel" },
+    { date: "2026-05-10", placing: 6, jockey: "L Hewitson" },
+  ],
+  J269: [
+    { date: "2026-06-29", placing: 5, jockey: "L Hewitson" },
+    { date: "2026-06-08", placing: 1, jockey: "L Hewitson" },
+    { date: "2026-05-18", placing: 4, jockey: "A Atzeni" },
+  ],
+  J508: [
+    { date: "2026-06-21", placing: 7, jockey: "L Ferraris" },
+    { date: "2026-06-02", placing: 2, jockey: "L Ferraris" },
+    { date: "2026-05-12", placing: 3, jockey: "H Bowman" },
+  ],
+};
+
+const drawHistoryIndex: Record<string, number[]> = {
+  H123: [2, 4, 3],
+  J269: [7, 5, 8],
+  J508: [4, 6, 5],
+  H106: [12, 11, 10],
+};
+
+const surfacePreferenceIndex: Record<string, string[]> = {
+  H123: ["GOOD", "GOOD TO FIRM"],
+  J269: ["GOOD TO FIRM"],
+  J508: ["GOOD", "YIELDING"],
+};
+
+const headToHeadIndex: Record<string, Record<string, { met: number; wins: number }>> = {
+  H123: {
+    J269: { met: 2, wins: 1 },
+    J508: { met: 1, wins: 1 },
+  },
+  J269: {
+    H123: { met: 2, wins: 1 },
+    J508: { met: 1, wins: 0 },
+  },
+  J508: {
+    H123: { met: 1, wins: 0 },
+    J269: { met: 1, wins: 1 },
+  },
+};
+
+const jockeyStats30dIndex: Record<string, RecentStats30d> = {
+  "A Badel": { runs: 120, wins: 15 },
+  "H Bowman": { runs: 92, wins: 11 },
+  "K Teetan": { runs: 107, wins: 10 },
+  "L Hewitson": { runs: 115, wins: 12 },
+  "R Kingscote": { runs: 45, wins: 4 },
+  "C Y Ho": { runs: 98, wins: 9 },
+  "L Ferraris": { runs: 101, wins: 8 },
+};
+
+const trainerStats30dIndex: Record<string, RecentStats30d> = {
+  "K W Lui": { runs: 84, wins: 12 },
+  "D J Hall": { runs: 78, wins: 7 },
+  "P F Yiu": { runs: 80, wins: 6 },
+  "C S Shum": { runs: 76, wins: 5 },
+  "J Size": { runs: 93, wins: 14 },
+  "F C Lor": { runs: 81, wins: 8 },
+  "D Eustace": { runs: 75, wins: 6 },
+};
+
+const jockeyTrainerComboStats30dIndex: Record<string, RecentStats30d> = {
+  "A Badel|K W Lui": { runs: 16, wins: 3 },
+  "H Bowman|D J Hall": { runs: 12, wins: 2 },
+  "K Teetan|P F Yiu": { runs: 14, wins: 1 },
+  "L Hewitson|C S Shum": { runs: 13, wins: 1 },
+  "R Kingscote|J Size": { runs: 9, wins: 2 },
+  "C Y Ho|F C Lor": { runs: 11, wins: 2 },
+  "L Ferraris|D Eustace": { runs: 10, wins: 1 },
+};
+
+export function getHongKongDateString(date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Hong_Kong",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+const raceData: Race[] = [
+  {
+    id: "2026-07-14-ST-1",
+    date: "2026-07-14",
+    course: "ST",
+    raceNo: 1,
+    className: "Class 4",
+    distanceM: 1200,
+    going: "Good",
+    updatedAt: "2026-07-14T09:05:00+08:00",
+    entries: [
+      {
+        horseNo: 1,
+        horseName: "Silver Peak",
+        jockey: "A Badel",
+        trainer: "K W Lui",
+        draw: 3,
+        weight: 132,
+        oddsWin: 4.8,
+        winProb: 0.24,
+        placeProb: 0.51,
+        confidence: "high",
+        factors: ["Draw advantage", "Stable form up", "Positive odds drift"],
+      },
+      {
+        horseNo: 2,
+        horseName: "Fast Comet",
+        jockey: "H Bowman",
+        trainer: "D J Hall",
+        draw: 10,
+        weight: 128,
+        oddsWin: 6.2,
+        winProb: 0.18,
+        placeProb: 0.42,
+        confidence: "medium",
+        factors: ["Jockey form strong", "Wide draw risk", "Consistent last 3 runs"],
+      },
+      {
+        horseNo: 3,
+        horseName: "Lucky Tempo",
+        jockey: "K Teetan",
+        trainer: "P F Yiu",
+        draw: 5,
+        weight: 126,
+        oddsWin: 8.5,
+        winProb: 0.13,
+        placeProb: 0.33,
+        confidence: "medium",
+        factors: ["Suitable distance", "Late pace profile", "Market support steady"],
+      },
+      {
+        horseNo: 4,
+        horseName: "Dragon Echo",
+        jockey: "L Hewitson",
+        trainer: "C S Shum",
+        draw: 12,
+        weight: 123,
+        oddsWin: 19,
+        winProb: 0.07,
+        placeProb: 0.2,
+        confidence: "low",
+        factors: ["Long odds", "Outside barrier", "Needs fast pace setup"],
+      },
+    ],
+  },
+  {
+    id: "2026-07-14-HV-3",
+    date: "2026-07-14",
+    course: "HV",
+    raceNo: 3,
+    className: "Class 3",
+    distanceM: 1650,
+    going: "Good to Firm",
+    updatedAt: "2026-07-14T09:10:00+08:00",
+    entries: [
+      {
+        horseNo: 1,
+        horseName: "Urban Legend",
+        jockey: "R Kingscote",
+        trainer: "J Size",
+        draw: 2,
+        weight: 135,
+        oddsWin: 3.9,
+        winProb: 0.27,
+        placeProb: 0.56,
+        confidence: "high",
+        factors: ["Top trainer strike rate", "Inside draw", "Strong sectional profile"],
+      },
+      {
+        horseNo: 2,
+        horseName: "Midnight Gear",
+        jockey: "C Y Ho",
+        trainer: "F C Lor",
+        draw: 7,
+        weight: 130,
+        oddsWin: 5.4,
+        winProb: 0.21,
+        placeProb: 0.47,
+        confidence: "medium",
+        factors: ["Pace versatility", "Recent top-3 finish", "Neutral draw"],
+      },
+      {
+        horseNo: 3,
+        horseName: "North Star",
+        jockey: "L Ferraris",
+        trainer: "D Eustace",
+        draw: 9,
+        weight: 124,
+        oddsWin: 11,
+        winProb: 0.1,
+        placeProb: 0.29,
+        confidence: "low",
+        factors: ["Weight relief", "Needs clean run", "Limited upside on figures"],
+      },
+    ],
+  },
+];
+
+function formatDateForHkjc(date: string): string {
+  return date.replace(/-/g, "/");
+}
+
+function parseRaceId(id: string): { date: string; course: "ST" | "HV"; raceNo: number } | null {
+  const match = id.match(/^(\d{4}-\d{2}-\d{2})-(ST|HV)-(\d+)$/);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    date: match[1],
+    course: match[2] as "ST" | "HV",
+    raceNo: Number(match[3]),
+  };
+}
+
+function parseNumber(input: string | undefined, fallback = 0): number {
+  if (!input) {
+    return fallback;
+  }
+
+  const clean = input.replace(/,/g, "").match(/[0-9]+(\.[0-9]+)?/);
+  if (!clean) {
+    return fallback;
+  }
+
+  return Number(clean[0]);
+}
+
+function extractHorseCode(raw: string): string | undefined {
+  const match = raw.match(/\(([A-Z]\d+)\)/i);
+  return match?.[1]?.toUpperCase();
+}
+
+function normalizeHorseName(raw: string): string {
+  return raw.replace(/\s*\([A-Z]\d+\)\s*$/i, "").trim();
+}
+
+function confidenceByWinProb(winProb: number): "low" | "medium" | "high" {
+  if (winProb >= 0.2) {
+    return "high";
+  }
+  if (winProb >= 0.1) {
+    return "medium";
+  }
+  return "low";
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function hashString(input: string): number {
+  let hash = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function getRecentHistory(entry: HorsePrediction): HorseHistoryRecord[] {
+  if (entry.horseCode && horseHistoryIndex[entry.horseCode]) {
+    return horseHistoryIndex[entry.horseCode];
+  }
+
+  const seed = hashString(`${entry.horseCode ?? entry.horseName}|history`);
+  return [0, 1, 2].map((index) => ({
+    date: `2026-06-${String(28 - index * 7).padStart(2, "0")}`,
+    placing: ((seed >> (index * 3)) % 10) + 1,
+    jockey: index === 0 ? entry.jockey : `J-${(seed + index) % 9}`,
+  }));
+}
+
+function getRecentFormScore(entry: HorsePrediction): { score: number; previousJockey?: string } {
+  const history = getRecentHistory(entry);
+  if (history.length === 0) {
+    return { score: 0.5 };
+  }
+
+  const avgPlacing = history.reduce((sum, item) => sum + item.placing, 0) / history.length;
+  const normalized = clamp01((14 - avgPlacing) / 13);
+  return {
+    score: Number(normalized.toFixed(4)),
+    previousJockey: history[0]?.jockey,
+  };
+}
+
+function getHeadToHeadMetrics(
+  target: HorsePrediction,
+  entries: HorsePrediction[],
+): { score: number; metRivalsCount: number } {
+  const targetKey = target.horseCode ?? target.horseName;
+  let metTotal = 0;
+  let winTotal = 0;
+
+  for (const rival of entries) {
+    if (rival.horseNo === target.horseNo) {
+      continue;
+    }
+
+    const rivalKey = rival.horseCode ?? rival.horseName;
+    const direct = target.horseCode ? headToHeadIndex[target.horseCode]?.[rival.horseCode ?? ""] : undefined;
+    if (direct) {
+      metTotal += direct.met;
+      winTotal += direct.wins;
+      continue;
+    }
+
+    const seed = hashString(`${targetKey}|${rivalKey}`);
+    const met = seed % 3 === 0 ? 1 : 0;
+    const wins = met === 1 ? (seed % 2) : 0;
+    metTotal += met;
+    winTotal += wins;
+  }
+
+  if (metTotal === 0) {
+    return { score: 0.5, metRivalsCount: 0 };
+  }
+
+  return {
+    score: Number(clamp01(winTotal / metTotal).toFixed(4)),
+    metRivalsCount: metTotal,
+  };
+}
+
+function normalizeGoing(going?: string): string {
+  return (going ?? "").toUpperCase().replace(/\s+/g, " ").trim();
+}
+
+function getDrawHistoryScore(entry: HorsePrediction): number {
+  const fallback = clamp01((14 - entry.draw) / 13);
+  if (!entry.horseCode || !drawHistoryIndex[entry.horseCode]) {
+    return Number(fallback.toFixed(4));
+  }
+
+  const avgDraw = drawHistoryIndex[entry.horseCode].reduce((sum, item) => sum + item, 0) /
+    drawHistoryIndex[entry.horseCode].length;
+  const delta = Math.abs(avgDraw - entry.draw);
+  const score = clamp01(1 - delta / 12);
+  return Number(score.toFixed(4));
+}
+
+function getDrawRangeLabel(entry: HorsePrediction): string {
+  if (entry.horseCode && drawHistoryIndex[entry.horseCode] && drawHistoryIndex[entry.horseCode].length > 0) {
+    const min = Math.min(...drawHistoryIndex[entry.horseCode]);
+    const max = Math.max(...drawHistoryIndex[entry.horseCode]);
+    return `${min}-${max}檔附近`;
+  }
+
+  const min = Math.max(1, entry.draw - 1);
+  const max = Math.min(14, entry.draw + 1);
+  return `${min}-${max}檔附近`;
+}
+
+function getSurfaceScore(entry: HorsePrediction, going?: string): number {
+  const normalizedGoing = normalizeGoing(going);
+  if (!normalizedGoing) {
+    return 0.5;
+  }
+
+  if (entry.horseCode && surfacePreferenceIndex[entry.horseCode]) {
+    const prefers = surfacePreferenceIndex[entry.horseCode].map((item) => normalizeGoing(item));
+    return prefers.includes(normalizedGoing) ? 0.8 : 0.45;
+  }
+
+  return normalizedGoing.includes("GOOD") ? 0.65 : 0.5;
+}
+
+function getWeatherImpactScore(entry: HorsePrediction, weather?: ModelContext["weather"]): number {
+  if (!weather || weather.temperatureC == null || weather.humidity == null) {
+    return 0.5;
+  }
+
+  const base = 0.5;
+  const tempPenalty = Math.max(0, weather.temperatureC - 30) * 0.02;
+  const humidityPenalty = Math.max(0, weather.humidity - 85) * 0.005;
+  const weightPenalty = Math.max(0, entry.weight - 130) * 0.003;
+  return Number(clamp01(base - tempPenalty - humidityPenalty - weightPenalty + 0.12).toFixed(4));
+}
+
+function getFallbackRecentStats30d(seedKey: string): RecentStats30d {
+  const seed = hashString(seedKey);
+  const runs = 25 + (seed % 75);
+  const wins = Math.max(0, Math.min(runs, Math.floor(runs * (0.06 + ((seed >> 3) % 15) / 100))));
+  return { runs, wins };
+}
+
+function getSmoothedWinRate(stats: RecentStats30d): number {
+  const priorRate = 0.1;
+  const priorWeight = 20;
+  const rate = (stats.wins + priorRate * priorWeight) / (stats.runs + priorWeight);
+  return Number(clamp01(rate).toFixed(4));
+}
+
+function getJockeyWinRate30d(entry: HorsePrediction): number {
+  const stats = jockeyStats30dIndex[entry.jockey] ?? getFallbackRecentStats30d(`jockey|${entry.jockey}`);
+  return getSmoothedWinRate(stats);
+}
+
+function getTrainerWinRate30d(entry: HorsePrediction): number {
+  const stats = trainerStats30dIndex[entry.trainer] ?? getFallbackRecentStats30d(`trainer|${entry.trainer}`);
+  return getSmoothedWinRate(stats);
+}
+
+function getJockeyTrainerComboRate30d(entry: HorsePrediction): number {
+  const key = `${entry.jockey}|${entry.trainer}`;
+  const stats = jockeyTrainerComboStats30dIndex[key] ?? getFallbackRecentStats30d(`combo|${key}`);
+  return getSmoothedWinRate(stats);
+}
+
+function softmax(values: number[]): number[] {
+  const max = Math.max(...values);
+  const exps = values.map((value) => Math.exp(value - max));
+  const sum = exps.reduce((acc, value) => acc + value, 0) || 1;
+  return exps.map((value) => value / sum);
+}
+
+function resolveHorseNameZh(entry: HorsePrediction): string | undefined {
+  if (entry.horseNameZh) {
+    return entry.horseNameZh;
+  }
+  if (entry.horseCode && horseNameZhByCode[entry.horseCode]) {
+    return horseNameZhByCode[entry.horseCode];
+  }
+  return undefined;
+}
+
+function buildTopFactors(entry: HorsePrediction): string[] {
+  const metrics = [
+    { name: `賽績 ${Math.round((entry.recentFormScore ?? 0) * 100)}%`, score: entry.recentFormScore ?? 0 },
+    { name: `同場交手 ${Math.round((entry.headToHeadScore ?? 0) * 100)}%`, score: entry.headToHeadScore ?? 0 },
+    {
+      name: `${entry.drawRangeLabel ?? "1-14檔附近"} ${Math.round((entry.drawHistoryScore ?? 0) * 100)}%`,
+      score: entry.drawHistoryScore ?? 0,
+    },
+    { name: `場地適配 ${Math.round((entry.surfaceScore ?? 0) * 100)}%`, score: entry.surfaceScore ?? 0 },
+    {
+      name: `天氣影響 ${Math.round((entry.weatherImpactScore ?? 0) * 100)}%`,
+      score: entry.weatherImpactScore ?? 0,
+    },
+    {
+      name: `騎師近30日勝率 ${Math.round((entry.jockeyWinRate30d ?? 0) * 100)}%`,
+      score: entry.jockeyWinRate30d ?? 0,
+    },
+    {
+      name: `練馬師近30日勝率 ${Math.round((entry.trainerWinRate30d ?? 0) * 100)}%`,
+      score: entry.trainerWinRate30d ?? 0,
+    },
+    {
+      name: `騎練組合近30日勝率 ${Math.round((entry.jockeyTrainerComboRate30d ?? 0) * 100)}%`,
+      score: entry.jockeyTrainerComboRate30d ?? 0,
+    },
+    {
+      name: entry.jockeyChanged ? "騎師變更" : "同騎師維持",
+      score: entry.jockeyChangeScore ?? 0,
+    },
+  ];
+
+  return metrics
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((item) => item.name);
+}
+
+function estimatePlaceOddsFromWin(winOdds: number): number {
+  if (!Number.isFinite(winOdds) || winOdds <= 1) {
+    return 1.1;
+  }
+
+  const estimated = 1 + (winOdds - 1) * 0.25;
+  return Number(Math.max(1.1, estimated).toFixed(1));
+}
+
+function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): HorsePrediction[] {
+  if (entries.length === 0) {
+    return entries;
+  }
+
+  const scored = entries.map((entry) => {
+    const form = getRecentFormScore(entry);
+    const h2h = getHeadToHeadMetrics(entry, entries);
+    const jockeyChanged = Boolean(form.previousJockey && form.previousJockey !== entry.jockey);
+    const jockeyChangeScore = jockeyChanged ? 0.45 : 0.55;
+    const drawHistoryScore = getDrawHistoryScore(entry);
+    const drawRangeLabel = getDrawRangeLabel(entry);
+    const surfaceScore = getSurfaceScore(entry, context?.going);
+    const weatherImpactScore = getWeatherImpactScore(entry, context?.weather);
+    const jockeyWinRate30d = getJockeyWinRate30d(entry);
+    const trainerWinRate30d = getTrainerWinRate30d(entry);
+    const jockeyTrainerComboRate30d = getJockeyTrainerComboRate30d(entry);
+    const connectionScore = Number(
+      clamp01(jockeyWinRate30d * 0.4 + trainerWinRate30d * 0.4 + jockeyTrainerComboRate30d * 0.2).toFixed(4),
+    );
+    const finalScore = Number(
+      (
+        form.score * 0.25 +
+        h2h.score * 0.15 +
+        jockeyChangeScore * 0.08 +
+        drawHistoryScore * 0.12 +
+        surfaceScore * 0.1 +
+        weatherImpactScore * 0.05 +
+        connectionScore * 0.25
+      ).toFixed(4),
+    );
+
+    return {
+      ...entry,
+      horseNameZh: resolveHorseNameZh(entry),
+      displayName: resolveHorseNameZh(entry) ?? entry.horseName,
+      recentFormScore: Number(form.score.toFixed(4)),
+      headToHeadScore: Number(h2h.score.toFixed(4)),
+      jockeyChangeScore,
+      drawHistoryScore,
+      drawRangeLabel,
+      surfaceScore,
+      weatherImpactScore,
+      jockeyWinRate30d,
+      trainerWinRate30d,
+      jockeyTrainerComboRate30d,
+      connectionScore,
+      metRivalsCount: h2h.metRivalsCount,
+      jockeyChanged,
+      previousJockey: form.previousJockey,
+      finalScore,
+    } as HorsePrediction;
+  });
+
+  const probs = softmax(scored.map((entry) => entry.finalScore ?? 0));
+  return scored.map((entry, index) => {
+    const winProb = Number(probs[index].toFixed(4));
+    const placeProb = Number(Math.min(0.85, winProb * 2.2).toFixed(4));
+    const enriched: HorsePrediction = {
+      ...entry,
+      winProb,
+      placeProb,
+      oddsPlace: entry.oddsPlace ?? estimatePlaceOddsFromWin(entry.oddsWin),
+      confidence: confidenceByWinProb(winProb),
+      factors: buildTopFactors(entry),
+    };
+    return enriched;
+  });
+}
+
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url, {
+    headers: {
+      "user-agent": "Mozilla/5.0 (compatible; JC-TEST-MVP/1.0)",
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+
+  return response.text();
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+function getFieldFromTable($: cheerio.CheerioAPI, label: string): string {
+  let value = "";
+  $("td").each((_, td) => {
+    const text = $(td).text().replace(/\s+/g, " ").trim();
+    if (text.toLowerCase() === label.toLowerCase()) {
+      value = $(td).next("td").text().replace(/\s+/g, " ").trim();
+    }
+  });
+  return value;
+}
+
+function extractRaceTime(rawHtml: string): string | undefined {
+  const matches = [...rawHtml.matchAll(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g)].map((m) => `${m[1].padStart(2, "0")}:${m[2]}`);
+  const uniq = Array.from(new Set(matches));
+  return uniq.find((item) => item >= "11:00" && item <= "23:59");
+}
+
+function toClassNameFromChinese(raw: string): string | undefined {
+  const match = raw.match(/第\s*([一二三四五])\s*班/);
+  if (!match) {
+    return undefined;
+  }
+
+  const map: Record<string, string> = {
+    一: "1",
+    二: "2",
+    三: "3",
+    四: "4",
+    五: "5",
+  };
+  const n = map[match[1]];
+  return n ? `Class ${n}` : undefined;
+}
+
+async function fetchZhRaceCardMetaById(parsed: {
+  date: string;
+  course: "ST" | "HV";
+  raceNo: number;
+}): Promise<RaceCardMeta | undefined> {
+  const url = `${HKJC_ZH_RACECARD_BASE}?raceDate=${formatDateForHkjc(parsed.date)}&racecourse=${parsed.course}&raceNo=${parsed.raceNo}`;
+  const html = await fetchText(url);
+  const $ = cheerio.load(html);
+  const rawText = $("div.f_fs13").first().text().replace(/\s+/g, " ").trim();
+  if (!rawText) {
+    return undefined;
+  }
+
+  const className = toClassNameFromChinese(rawText) ?? "Class N/A";
+  const distanceM = parseNumber(rawText.match(/(\d+)米/)?.[1], 0);
+  const raceTime = rawText.match(/(\d{2}:\d{2})/)?.[1];
+  const going =
+    rawText.match(
+      /(好地至快地|好地至快快地|好地至黏地|好地|黏地|軟地|泥快地|泥好地|泥黏地|濕快地|慢地)/,
+    )?.[1] ?? "待公布";
+
+  return {
+    className,
+    distanceM,
+    raceTime,
+    going,
+  };
+}
+
+async function fetchZhRaceCardRunnersById(parsed: {
+  date: string;
+  course: "ST" | "HV";
+  raceNo: number;
+}): Promise<RaceCardRunner[]> {
+  const url = `${HKJC_ZH_RACECARD_BASE}?raceDate=${formatDateForHkjc(parsed.date)}&racecourse=${parsed.course}&raceNo=${parsed.raceNo}`;
+  const html = await fetchText(url);
+  const $ = cheerio.load(html);
+  const rows = $("a[href*='horse?horseid']");
+  const runners: RaceCardRunner[] = [];
+
+  rows.each((_, anchor) => {
+    const tr = $(anchor).closest("tr");
+    const cells = tr
+      .find("td")
+      .map((__, td) => $(td).text().replace(/\s+/g, " ").trim())
+      .get();
+
+    if (cells.length < 12) {
+      return;
+    }
+
+    const horseNo = parseNumber(cells[0], Number.NaN);
+    if (!Number.isFinite(horseNo)) {
+      return;
+    }
+
+    const horseNameZh = cells[3] ?? "";
+    const horseCode = cells[4] || undefined;
+    const weight = parseNumber(cells[5], 0);
+    const jockey = cells[6] || "N/A";
+    const draw = parseNumber(cells[8], 0);
+    const trainer = cells[9] || "N/A";
+    const rating = parseNumber(cells[11], 0);
+
+    if (!horseNameZh) {
+      return;
+    }
+
+    runners.push({
+      horseNo,
+      horseCode,
+      horseNameZh,
+      jockey,
+      trainer,
+      draw,
+      weight,
+      rating,
+    });
+  });
+
+  return runners.sort((a, b) => a.horseNo - b.horseNo);
+}
+
+async function fetchRaceTimeById(parsed: { date: string; course: "ST" | "HV"; raceNo: number }): Promise<string | undefined> {
+  const url = `${HKJC_RACECARD_BASE}?raceDate=${formatDateForHkjc(parsed.date)}&racecourse=${parsed.course}&raceNo=${parsed.raceNo}`;
+  const html = await fetchText(url);
+  return extractRaceTime(html);
+}
+
+async function fetchEntriesRaceMetaByDate(date: string): Promise<{ course: "ST" | "HV"; races: EntryRaceMeta[] } | undefined> {
+  const url = `${HKJC_ENTRIES_BASE}?RaceDate=${formatDateForHkjc(date)}`;
+  const html = await fetchText(url);
+  const $ = cheerio.load(html);
+  const pageText = $.text().replace(/\s+/g, " ").trim();
+
+  const course = pageText.includes("Happy Valley") ? "HV" : pageText.includes("Sha Tin") ? "ST" : undefined;
+  if (!course) {
+    return undefined;
+  }
+
+  const matches = [...pageText.matchAll(/Class\s+(\d+)\s+(\d+)m\s+Section/gi)];
+  if (matches.length === 0) {
+    return undefined;
+  }
+
+  const races = matches.map((match, index) => ({
+    raceNo: index + 1,
+    className: `Class ${match[1]}`,
+    distanceM: Number(match[2]),
+  }));
+
+  return { course, races };
+}
+
+async function fetchHkjcChineseNameByNo(
+  parsed: { date: string; course: "ST" | "HV"; raceNo: number },
+): Promise<Map<number, string>> {
+  const url = `${HKJC_ZH_BASE}?racedate=${formatDateForHkjc(parsed.date)}&Racecourse=${parsed.course}&RaceNo=${parsed.raceNo}`;
+  const html = await fetchText(url);
+  const $ = cheerio.load(html);
+  const result = new Map<number, string>();
+
+  $("tr").each((_, tr) => {
+    const cells = $(tr)
+      .find("td")
+      .map((__, td) => $(td).text().replace(/\s+/g, " ").trim())
+      .get();
+
+    if (cells.length < 3) {
+      return;
+    }
+
+    const horseNo = parseNumber(cells[1], Number.NaN);
+    if (!Number.isFinite(horseNo)) {
+      return;
+    }
+
+    const horseNameZh = cells[2];
+    if (horseNameZh) {
+      result.set(horseNo, horseNameZh);
+    }
+  });
+
+  return result;
+}
+
+async function fetchHkjcRaceById(id: string): Promise<Race | undefined> {
+  const parsed = parseRaceId(id);
+  if (!parsed) {
+    return undefined;
+  }
+
+  const url = `${HKJC_BASE}?racedate=${formatDateForHkjc(parsed.date)}&Racecourse=${parsed.course}&RaceNo=${parsed.raceNo}`;
+  const html = await fetchText(url);
+  const $ = cheerio.load(html);
+
+  const classDistance = $("td")
+    .map((_, td) => $(td).text().replace(/\s+/g, " ").trim())
+    .get()
+    .find((item) => /Class\s*\d+\s*-\s*\d+M/i.test(item));
+
+  let distanceM = classDistance ? parseNumber(classDistance.match(/(\d+)M/i)?.[1], 0) : 0;
+  let className = classDistance?.match(/Class\s*\d+/i)?.[0] ?? "Class N/A";
+  let going = getFieldFromTable($, "Going :") || "待公布";
+  let raceTime: string | undefined;
+  try {
+    raceTime = await fetchRaceTimeById(parsed);
+  } catch {
+    raceTime = undefined;
+  }
+
+  try {
+    const zhMeta = await fetchZhRaceCardMetaById(parsed);
+    if (zhMeta) {
+      className = zhMeta.className || className;
+      distanceM = zhMeta.distanceM || distanceM;
+      going = zhMeta.going || going;
+      raceTime = zhMeta.raceTime ?? raceTime;
+    }
+  } catch {
+    // keep parsed values
+  }
+  let chineseNameByNo = new Map<number, string>();
+  try {
+    chineseNameByNo = await fetchHkjcChineseNameByNo(parsed);
+  } catch {
+    chineseNameByNo = new Map<number, string>();
+  }
+  let zhRunners: RaceCardRunner[] = [];
+  try {
+    zhRunners = await fetchZhRaceCardRunnersById(parsed);
+  } catch {
+    zhRunners = [];
+  }
+  let weatherContext: ModelContext["weather"];
+  try {
+    const weather = await getCurrentWeather();
+    weatherContext = {
+      temperatureC: weather.temperatureC,
+      humidity: weather.humidity,
+    };
+  } catch {
+    weatherContext = {
+      temperatureC: null,
+      humidity: null,
+    };
+  }
+
+  const entriesRaw: HorsePrediction[] = [];
+
+  if (zhRunners.length > 0) {
+    const maxRating = Math.max(...zhRunners.map((item) => item.rating || 0), 1);
+    for (const runner of zhRunners) {
+      const ratingGap = Math.max(0, maxRating - runner.rating);
+      const oddsFromRating = Number((2.5 + ratingGap * 0.35).toFixed(1));
+
+      entriesRaw.push({
+        horseNo: runner.horseNo,
+        horseCode: runner.horseCode,
+        horseName: runner.horseCode ?? runner.horseNameZh,
+        horseNameZh: runner.horseNameZh,
+        jockey: runner.jockey,
+        trainer: runner.trainer,
+        draw: runner.draw,
+        weight: runner.weight,
+        oddsWin: oddsFromRating,
+        winProb: 0,
+        placeProb: 0,
+        confidence: "low",
+        factors: [],
+      });
+    }
+  } else {
+    $("tr").each((_, tr) => {
+      const cells = $(tr)
+        .find("td")
+        .map((__, td) => $(td).text().replace(/\s+/g, " ").trim())
+        .get();
+
+      if (cells.length < 10) {
+        return;
+      }
+
+      const rank = parseNumber(cells[0], Number.NaN);
+      const horseNo = parseNumber(cells[1], Number.NaN);
+      if (!Number.isFinite(rank) || !Number.isFinite(horseNo)) {
+        return;
+      }
+
+      const horseNameRaw = cells[2] ?? "";
+      const horseCode = extractHorseCode(horseNameRaw);
+      const odds = parseNumber(cells[cells.length - 1], 99);
+      const draw = parseNumber(cells[7], 0);
+      const weight = parseNumber(cells[5], 0);
+      const jockey = cells[3] ?? "N/A";
+      const trainer = cells[4] ?? "N/A";
+
+      if (!horseNameRaw) {
+        return;
+      }
+
+      entriesRaw.push({
+        horseNo,
+        horseCode,
+        horseName: normalizeHorseName(horseNameRaw),
+        horseNameZh: chineseNameByNo.get(horseNo) ?? (horseCode ? horseNameZhByCode[horseCode] : undefined),
+        jockey,
+        trainer,
+        draw,
+        weight,
+        oddsWin: odds,
+        winProb: 0,
+        placeProb: 0,
+        confidence: "low",
+        factors: [],
+      });
+    });
+  }
+
+  const dedupMap = new Map<number, HorsePrediction>();
+  for (const entry of entriesRaw) {
+    if (!dedupMap.has(entry.horseNo)) {
+      dedupMap.set(entry.horseNo, entry);
+    }
+  }
+
+  const entries = applyFeatureModel(Array.from(dedupMap.values()), {
+    going,
+    weather: weatherContext,
+  });
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return {
+    id,
+    date: parsed.date,
+    course: parsed.course,
+    raceNo: parsed.raceNo,
+    className,
+    distanceM,
+    raceTime,
+    going,
+    updatedAt: new Date().toISOString(),
+    entries,
+  };
+}
+
+async function fetchLiveRacesByDate(date: string): Promise<Race[]> {
+  const meta = await fetchEntriesRaceMetaByDate(date);
+  if (!meta || meta.races.length === 0) {
+    return [];
+  }
+
+  const races = await Promise.all(
+    meta.races.map(async (item) => {
+      let zhMeta: RaceCardMeta | undefined;
+      try {
+        zhMeta = await fetchZhRaceCardMetaById({ date, course: meta.course, raceNo: item.raceNo });
+      } catch {
+        zhMeta = undefined;
+      }
+
+      let raceTime: string | undefined;
+      try {
+        raceTime = await fetchRaceTimeById({ date, course: meta.course, raceNo: item.raceNo });
+      } catch {
+        raceTime = undefined;
+      }
+
+      return {
+        id: `${date}-${meta.course}-${item.raceNo}`,
+        date,
+        course: meta.course,
+        raceNo: item.raceNo,
+        className: zhMeta?.className ?? item.className,
+        distanceM: zhMeta?.distanceM ?? item.distanceM,
+        raceTime: zhMeta?.raceTime ?? raceTime,
+        going: zhMeta?.going ?? "待公布",
+        updatedAt: new Date().toISOString(),
+        entries: [],
+      } satisfies Race;
+    }),
+  );
+
+  return races.sort((a, b) => a.raceNo - b.raceNo);
+}
+
+function getMockRacesByDate(date: string): Race[] {
+  return raceData.filter((race) => race.date === date);
+}
+
+function addDays(date: string, days: number): string {
+  const base = new Date(`${date}T00:00:00Z`);
+  base.setUTCDate(base.getUTCDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
+export async function getRacesWithNextFallback(
+  requestedDate: string,
+  lookAheadDays = 14,
+): Promise<{
+  requestedDate: string;
+  effectiveDate: string;
+  fallbackApplied: boolean;
+  races: Race[];
+}> {
+  const todayRaces = await getRacesByDate(requestedDate);
+  if (todayRaces.length > 0) {
+    return {
+      requestedDate,
+      effectiveDate: requestedDate,
+      fallbackApplied: false,
+      races: todayRaces,
+    };
+  }
+
+  for (let offset = 1; offset <= lookAheadDays; offset += 1) {
+    const nextDate = addDays(requestedDate, offset);
+    const nextRaces = await getRacesByDate(nextDate);
+    if (nextRaces.length > 0) {
+      return {
+        requestedDate,
+        effectiveDate: nextDate,
+        fallbackApplied: true,
+        races: nextRaces,
+      };
+    }
+  }
+
+  return {
+    requestedDate,
+    effectiveDate: requestedDate,
+    fallbackApplied: false,
+    races: [],
+  };
+}
+
+export async function getRacesByDate(date: string): Promise<Race[]> {
+  if (USE_MOCK_DATA) {
+    return getMockRacesByDate(date);
+  }
+
+  if (!USE_LIVE_HKJC) {
+    return [];
+  }
+
+  try {
+    const live = await fetchLiveRacesByDate(date);
+    return live;
+  } catch {
+    return [];
+  }
+}
+
+export async function getRaceById(id: string): Promise<Race | undefined> {
+  if (USE_MOCK_DATA || !USE_LIVE_HKJC) {
+    const mockRace = raceData.find((race) => race.id === id);
+    if (!mockRace) {
+      return undefined;
+    }
+    return {
+      ...mockRace,
+      entries: applyFeatureModel(mockRace.entries, {
+        going: mockRace.going,
+        weather: { temperatureC: 28, humidity: 76 },
+      }),
+    };
+  }
+
+  try {
+    const live = await fetchHkjcRaceById(id);
+    if (live) {
+      return live;
+    }
+  } catch {
+    const mockRace = raceData.find((race) => race.id === id);
+    if (!mockRace) {
+      return undefined;
+    }
+    return {
+      ...mockRace,
+      entries: applyFeatureModel(mockRace.entries, {
+        going: mockRace.going,
+        weather: { temperatureC: 28, humidity: 76 },
+      }),
+    };
+  }
+
+  const mockRace = raceData.find((race) => race.id === id);
+  if (!mockRace) {
+    return undefined;
+  }
+  return {
+    ...mockRace,
+    entries: applyFeatureModel(mockRace.entries, {
+      going: mockRace.going,
+      weather: { temperatureC: 28, humidity: 76 },
+    }),
+  };
+}
+
+export async function getPredictionsByRaceId(id: string): Promise<HorsePrediction[]> {
+  const race = await getRaceById(id);
+  if (!race) {
+    return [];
+  }
+
+  return [...race.entries].sort((a, b) => b.winProb - a.winProb);
+}
+
+export async function getOddsTrendByRaceId(
+  id: string,
+): Promise<Array<{ t: string; horseNo: number; odds: number }>> {
+  const race = await getRaceById(id);
+  if (!race) {
+    return [];
+  }
+
+  return race.entries.flatMap((entry) => [
+    { t: "T-60", horseNo: entry.horseNo, odds: Number((entry.oddsWin * 1.12).toFixed(2)) },
+    { t: "T-30", horseNo: entry.horseNo, odds: Number((entry.oddsWin * 1.05).toFixed(2)) },
+    { t: "T-10", horseNo: entry.horseNo, odds: entry.oddsWin },
+  ]);
+}
+
+export async function getDataLatencyStatus() {
+  const latest = raceData.reduce((acc, race) => {
+    return acc > race.updatedAt ? acc : race.updatedAt;
+  }, raceData[0]?.updatedAt ?? new Date().toISOString());
+
+  return {
+    source: USE_MOCK_DATA ? "mock" : "live+fallback",
+    latestUpdate: latest,
+    stale: false,
+  };
+}
+
+export async function getCurrentWeather(): Promise<WeatherCurrent> {
+  if (USE_MOCK_DATA) {
+    return {
+      source: "mock",
+      updateTime: new Date().toISOString(),
+      temperatureC: 28,
+      humidity: 76,
+      icon: null,
+    };
+  }
+
+  try {
+    const url = `${HKO_BASE}?dataType=rhrread&lang=tc`;
+    const payload = await fetchJson<{
+      updateTime?: string;
+      icon?: number[];
+      humidity?: { data?: Array<{ value?: number }> };
+      temperature?: { data?: Array<{ place?: string; value?: number }> };
+    }>(url);
+
+    const tempHKO = payload.temperature?.data?.find((item) => item.place === "香港天文台")?.value;
+    const tempAny = payload.temperature?.data?.[0]?.value;
+    const humidity = payload.humidity?.data?.[0]?.value ?? null;
+
+    return {
+      source: "hko",
+      updateTime: payload.updateTime ?? new Date().toISOString(),
+      temperatureC: tempHKO ?? tempAny ?? null,
+      humidity,
+      icon: payload.icon?.[0] ?? null,
+    };
+  } catch {
+    return {
+      source: "mock",
+      updateTime: new Date().toISOString(),
+      temperatureC: 28,
+      humidity: 76,
+      icon: null,
+    };
+  }
+}
+
+export async function getNineDayForecast(): Promise<NineDayForecast> {
+  if (USE_MOCK_DATA) {
+    return {
+      source: "mock",
+      updateTime: new Date().toISOString(),
+      days: [],
+    };
+  }
+
+  try {
+    const url = `${HKO_BASE}?dataType=fnd&lang=tc`;
+    const payload = await fetchJson<{
+      updateTime?: string;
+      weatherForecast?: Array<{
+        forecastDate?: string;
+        week?: string;
+        forecastMintemp?: { value?: number };
+        forecastMaxtemp?: { value?: number };
+        forecastWeather?: string;
+      }>;
+    }>(url);
+
+    return {
+      source: "hko",
+      updateTime: payload.updateTime ?? new Date().toISOString(),
+      days:
+        payload.weatherForecast?.map((item) => ({
+          date: item.forecastDate ?? "",
+          week: item.week ?? "",
+          minTempC: item.forecastMintemp?.value ?? 0,
+          maxTempC: item.forecastMaxtemp?.value ?? 0,
+          weather: item.forecastWeather ?? "",
+        })) ?? [],
+    };
+  } catch {
+    return {
+      source: "mock",
+      updateTime: new Date().toISOString(),
+      days: [],
+    };
+  }
+}

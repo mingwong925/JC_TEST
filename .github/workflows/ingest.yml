@@ -1,0 +1,26 @@
+name: ingest-mvp
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install
+        run: npm ci
+
+      - name: Placeholder ingest
+        run: |
+          echo "MVP ingest placeholder"
+          echo "Hook up HKO + race adapters in next iteration"

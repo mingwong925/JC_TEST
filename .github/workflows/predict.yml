@@ -1,0 +1,26 @@
+name: predict-mvp
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15,45 * * * *"
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install
+        run: npm ci
+
+      - name: Placeholder prediction
+        run: |
+          echo "MVP prediction placeholder"
+          echo "Model baseline execution to be added"
