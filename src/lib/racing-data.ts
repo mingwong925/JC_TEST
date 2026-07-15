@@ -1083,53 +1083,78 @@ query racing($date: String, $venueCode: String, $oddsTypes: [OddsType], $raceNo:
     };
   };
 
-  const response = await fetch(HKJC_LOCAL_GRAPHQL_BASE, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json",
-      "user-agent": "Mozilla/5.0 (compatible; JC-TEST-MVP/1.0)",
-    },
-    body: JSON.stringify({
-      operationName: "racing",
-      variables: {
-        date: parsed.date,
-        venueCode: parsed.course,
-        raceNo: parsed.raceNo,
-        oddsTypes: ["WIN", "PLA"],
-      },
-      query,
-    }),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    throw new Error(`Live odds request failed: ${response.status}`);
-  }
-
-  const payload = (await response.json()) as Payload;
   const winByNo = new Map<number, number>();
   const placeByNo = new Map<number, number>();
 
-  const pools = payload?.data?.raceMeetings?.[0]?.pmPools ?? [];
-  for (const pool of pools) {
-    const oddsType = (pool.oddsType ?? "").toUpperCase();
-    if (oddsType !== "WIN" && oddsType !== "PLA") {
-      continue;
+  try {
+    const response = await fetch(HKJC_LOCAL_GRAPHQL_BASE, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        "user-agent": "Mozilla/5.0 (compatible; JC-TEST-MVP/1.0)",
+      },
+      body: JSON.stringify({
+        operationName: "racing",
+        variables: {
+          date: parsed.date,
+          venueCode: parsed.course,
+          raceNo: parsed.raceNo,
+          oddsTypes: ["WIN", "PLA"],
+        },
+        query,
+      }),
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      const payload = (await response.json()) as Payload;
+      const pools = payload?.data?.raceMeetings?.[0]?.pmPools ?? [];
+      for (const pool of pools) {
+        const oddsType = (pool.oddsType ?? "").toUpperCase();
+        if (oddsType !== "WIN" && oddsType !== "PLA") {
+          continue;
+        }
+
+        for (const node of pool.oddsNodes ?? []) {
+          const horseNo = parseNumber(node.combString, Number.NaN);
+          const odds = parseOddsValue(node.oddsValue);
+          if (!Number.isFinite(horseNo) || odds == null) {
+            continue;
+          }
+
+          if (oddsType === "WIN") {
+            winByNo.set(horseNo, odds);
+          } else {
+            placeByNo.set(horseNo, odds);
+          }
+        }
+      }
     }
+  } catch {
+    // fallback below
+  }
 
-    for (const node of pool.oddsNodes ?? []) {
-      const horseNo = parseNumber(node.combString, Number.NaN);
-      const odds = parseOddsValue(node.oddsValue);
-      if (!Number.isFinite(horseNo) || odds == null) {
-        continue;
-      }
+  if (winByNo.size > 0 || placeByNo.size > 0) {
+    return { winByNo, placeByNo };
+  }
 
-      if (oddsType === "WIN") {
-        winByNo.set(horseNo, odds);
-      } else {
-        placeByNo.set(horseNo, odds);
-      }
+  // Fallback: parse live odds from the HKJC Win/Place webpage text mirror.
+  // Source page: https://bet.hkjc.com/ch/racing/wp/{date}/{venue}/{raceNo}
+  const mirrorUrl = `https://r.jina.ai/http://bet.hkjc.com/ch/racing/wp/${parsed.date}/${parsed.course}/${parsed.raceNo}`;
+  const mirrorText = await fetchText(mirrorUrl);
+  const rowRegex = /(\d+)\[[^\]]+\]\([^)]*\)\d+\s+\d+\[[^\]]+\]\([^)]*\)\[[^\]]+\]\([^)]*\)-\s*\[x\][\s\S]*?\[([0-9]+(?:\.[0-9]+)?)\]\([^)]*\)\s*-\s*\[x\][\s\S]*?\[([0-9]+(?:\.[0-9]+)?)\]\(/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = rowRegex.exec(mirrorText)) !== null) {
+    const horseNo = Number(match[1]);
+    const winOdds = Number(match[2]);
+    const placeOdds = Number(match[3]);
+    if (Number.isFinite(horseNo) && Number.isFinite(winOdds) && winOdds > 0) {
+      winByNo.set(horseNo, winOdds);
+    }
+    if (Number.isFinite(horseNo) && Number.isFinite(placeOdds) && placeOdds > 0) {
+      placeByNo.set(horseNo, placeOdds);
     }
   }
 
