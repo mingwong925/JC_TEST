@@ -72,8 +72,11 @@ const HKJC_ZH_BASE = "https://racing.hkjc.com/zh-hk/local/information/localresul
 const HKJC_ENTRIES_BASE = "https://racing.hkjc.com/en-us/local/information/entries";
 const HKJC_RACECARD_BASE = "https://racing.hkjc.com/en-us/local/information/racecard";
 const HKJC_ZH_RACECARD_BASE = "https://racing.hkjc.com/zh-hk/local/information/racecard";
-const HKJC_JOCKEY_STANDINGS_BASE = "https://racing.hkjc.com/racing/information/English/Jockey/JockeyRanking.aspx";
-const HKJC_TRAINER_STANDINGS_BASE = "https://racing.hkjc.com/racing/information/English/Trainers/TrainerRanking.aspx";
+const HKJC_JOCKEY_STANDINGS_BASE =
+  "https://racing.hkjc.com/zh-hk/local/info/jockey-ranking?season=Current&view=Numbers&racecourse=ALL";
+const HKJC_TRAINER_STANDINGS_BASE =
+  "https://racing.hkjc.com/zh-hk/local/info/trainer-ranking?season=Current&view=Numbers&racecourse=ALL";
+const HKJC_LOCAL_GRAPHQL_BASE = "https://info.cld.hkjc.com/graphql/base/";
 const HKO_BASE = process.env.HKO_BASE_URL ?? "https://data.weather.gov.hk/weatherAPI/opendata/weather.php";
 const USE_MOCK_DATA = process.env.USE_MOCK_DATA === "true";
 const USE_LIVE_HKJC = process.env.USE_LIVE_HKJC !== "false";
@@ -87,6 +90,25 @@ type HorseHistoryRecord = {
 type RecentStats30d = {
   runs: number;
   wins: number;
+};
+
+type HkjcRankingStatNode = {
+  numFirst?: number;
+  numStarts?: number;
+  trk?: string;
+  ven?: string;
+};
+
+type HkjcJockeyNode = {
+  name_ch?: string;
+  name_en?: string;
+  ssnStat?: HkjcRankingStatNode[];
+};
+
+type HkjcTrainerNode = {
+  name_ch?: string;
+  name_en?: string;
+  ssnStat?: HkjcRankingStatNode[];
 };
 
 type ModelContext = {
@@ -397,7 +419,7 @@ function normalizePersonName(name: string): string {
   return name.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-function parseStandingsStats(html: string): Record<string, RecentStats30d> {
+function parseStandingsStatsFromHtml(html: string): Record<string, RecentStats30d> {
   const $ = cheerio.load(html);
   const result: Record<string, RecentStats30d> = {};
 
@@ -407,25 +429,17 @@ function parseStandingsStats(html: string): Record<string, RecentStats30d> {
       .map((__, td) => $(td).text().replace(/\s+/g, " ").trim())
       .get();
 
-    if (cells.length < 6) {
+    if (cells.length < 7) {
       return;
     }
 
-    const name = cells.find((item) => /[A-Za-z]/.test(item) && item.length >= 3);
+    const name = cells[0];
     if (!name) {
       return;
     }
 
-    const numbers = cells
-      .map((cell) => parseNumber(cell, Number.NaN))
-      .filter((value) => Number.isFinite(value));
-
-    if (numbers.length < 2) {
-      return;
-    }
-
-    const runs = Number(numbers[numbers.length - 2]);
-    const wins = Number(numbers[numbers.length - 1]);
+    const wins = parseNumber(cells[1], Number.NaN);
+    const runs = parseNumber(cells[6], Number.NaN);
     if (!Number.isFinite(runs) || !Number.isFinite(wins) || runs <= 0 || wins < 0 || wins > runs) {
       return;
     }
@@ -436,28 +450,204 @@ function parseStandingsStats(html: string): Record<string, RecentStats30d> {
   return result;
 }
 
-async function refreshLiveConnectionStats(): Promise<void> {
+function pickAggregateSeasonStat(stats: HkjcRankingStatNode[] | undefined): RecentStats30d | undefined {
+  if (!stats || stats.length === 0) {
+    return undefined;
+  }
+
+  const normalized = stats
+    .map((item) => ({
+      wins: Number(item.numFirst ?? Number.NaN),
+      runs: Number(item.numStarts ?? Number.NaN),
+      trk: (item.trk ?? "").toUpperCase(),
+      ven: (item.ven ?? "").toUpperCase(),
+    }))
+    .filter((item) => Number.isFinite(item.wins) && Number.isFinite(item.runs) && item.runs > 0 && item.wins >= 0 && item.wins <= item.runs);
+
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
+  const allStat = normalized.find((item) => item.trk === "ALL" && item.ven === "ALL");
+  if (allStat) {
+    return { wins: allStat.wins, runs: allStat.runs };
+  }
+
+  const byRuns = [...normalized].sort((a, b) => b.runs - a.runs)[0];
+  return byRuns ? { wins: byRuns.wins, runs: byRuns.runs } : undefined;
+}
+
+function parseJockeyStatsFromGraphql(nodes: HkjcJockeyNode[] | undefined): Record<string, RecentStats30d> {
+  const result: Record<string, RecentStats30d> = {};
+  if (!nodes || nodes.length === 0) {
+    return result;
+  }
+
+  for (const node of nodes) {
+    const stat = pickAggregateSeasonStat(node.ssnStat);
+    if (!stat) {
+      continue;
+    }
+
+    const names = [node.name_ch, node.name_en].map((name) => (name ?? "").trim()).filter(Boolean);
+    for (const name of names) {
+      result[normalizePersonName(name)] = stat;
+    }
+  }
+
+  return result;
+}
+
+function parseTrainerStatsFromGraphql(nodes: HkjcTrainerNode[] | undefined): Record<string, RecentStats30d> {
+  const result: Record<string, RecentStats30d> = {};
+  if (!nodes || nodes.length === 0) {
+    return result;
+  }
+
+  for (const node of nodes) {
+    const stat = pickAggregateSeasonStat(node.ssnStat);
+    if (!stat) {
+      continue;
+    }
+
+    const names = [node.name_ch, node.name_en].map((name) => (name ?? "").trim()).filter(Boolean);
+    for (const name of names) {
+      result[normalizePersonName(name)] = stat;
+    }
+  }
+
+  return result;
+}
+
+async function fetchGraphqlJson<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  const response = await fetch(HKJC_LOCAL_GRAPHQL_BASE, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "user-agent": "Mozilla/5.0 (compatible; JC-TEST-MVP/1.0)",
+      accept: "application/json",
+      origin: "https://racing.hkjc.com",
+      referer: "https://racing.hkjc.com/",
+    },
+    body: JSON.stringify({ query, variables }),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`GraphQL request failed: ${response.status}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+async function fetchCurrentSeasonCode(): Promise<string | undefined> {
   try {
+    const payload = await fetchGraphqlJson<{ data?: { lastMeeting?: { season?: string } } }>(
+      `
+query rw_LastMeeting($venueCodes: [String!]) {
+  lastMeeting(venueCodes: $venueCodes) {
+    date
+    season
+  }
+}
+`,
+      { venueCodes: ["ST", "HV", "CH"] },
+    );
+    const season = payload?.data?.lastMeeting?.season?.trim();
+    if (season) {
+      return season;
+    }
+  } catch {
+    // fallback to season period query
+  }
+
+  try {
+    const payload = await fetchGraphqlJson<{ data?: { racingSeasonPeriod?: Array<{ code?: string }> } }>(
+      `
+query rw_RacingSeasonPeriod($locSim: LocalSim) {
+  racingSeasonPeriod(locSim: $locSim) {
+    code
+    endDate
+    startDate
+  }
+}
+`,
+      { locSim: "LOCAL" },
+    );
+    const season = payload?.data?.racingSeasonPeriod?.[0]?.code?.trim();
+    return season || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function refreshLiveConnectionStats(): Promise<void> {
+  for (const key of Object.keys(jockeyStatsLiveIndex)) {
+    delete jockeyStatsLiveIndex[key];
+  }
+  for (const key of Object.keys(trainerStatsLiveIndex)) {
+    delete trainerStatsLiveIndex[key];
+  }
+  for (const key of Object.keys(jockeyTrainerComboLiveIndex)) {
+    delete jockeyTrainerComboLiveIndex[key];
+  }
+
+  try {
+    const season = await fetchCurrentSeasonCode();
+    if (season) {
+      const [jockeyPayload, trainerPayload] = await Promise.all([
+        fetchGraphqlJson<{ data?: { jockeyStat?: HkjcJockeyNode[] } }>(
+          `
+query rw_GetJockeyRanking($season: String) {
+  jockeyStat(season: $season) {
+    name_ch
+    name_en
+    ssnStat {
+      numFirst
+      numStarts
+      trk
+      ven
+    }
+  }
+}
+`,
+          { season },
+        ),
+        fetchGraphqlJson<{ data?: { trainerStat?: HkjcTrainerNode[] } }>(
+          `
+query rw_GetTrainerRanking($season: String) {
+  trainerStat(season: $season) {
+    name_ch
+    name_en
+    ssnStat {
+      numFirst
+      numStarts
+      trk
+      ven
+    }
+  }
+}
+`,
+          { season },
+        ),
+      ]);
+
+      const jockeyParsed = parseJockeyStatsFromGraphql(jockeyPayload?.data?.jockeyStat);
+      const trainerParsed = parseTrainerStatsFromGraphql(trainerPayload?.data?.trainerStat);
+      Object.assign(jockeyStatsLiveIndex, jockeyParsed);
+      Object.assign(trainerStatsLiveIndex, trainerParsed);
+    }
+
+    if (Object.keys(jockeyStatsLiveIndex).length > 0 || Object.keys(trainerStatsLiveIndex).length > 0) {
+      return;
+    }
+
     const [jockeyHtml, trainerHtml] = await Promise.all([
       fetchText(HKJC_JOCKEY_STANDINGS_BASE),
       fetchText(HKJC_TRAINER_STANDINGS_BASE),
     ]);
-
-    const jockeyParsed = parseStandingsStats(jockeyHtml);
-    const trainerParsed = parseStandingsStats(trainerHtml);
-
-    for (const key of Object.keys(jockeyStatsLiveIndex)) {
-      delete jockeyStatsLiveIndex[key];
-    }
-    for (const key of Object.keys(trainerStatsLiveIndex)) {
-      delete trainerStatsLiveIndex[key];
-    }
-    for (const key of Object.keys(jockeyTrainerComboLiveIndex)) {
-      delete jockeyTrainerComboLiveIndex[key];
-    }
-
-    Object.assign(jockeyStatsLiveIndex, jockeyParsed);
-    Object.assign(trainerStatsLiveIndex, trainerParsed);
+    Object.assign(jockeyStatsLiveIndex, parseStandingsStatsFromHtml(jockeyHtml));
+    Object.assign(trainerStatsLiveIndex, parseStandingsStatsFromHtml(trainerHtml));
   } catch {
     // strict mode: if fetch fails keep indices empty instead of fake fallback
   }
