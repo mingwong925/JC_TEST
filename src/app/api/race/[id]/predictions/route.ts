@@ -11,11 +11,20 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 
   return NextResponse.json({
     raceId: id,
-    modelVersion: "feature-v3-no-odds",
+    modelVersion: "feature-v4-all-signals",
     featureSet: [
+      "oddsWin",
+      "oddsPlace",
       "recentForm",
+      "headToHead",
+      "jockeyChange",
+      "draw",
+      "drawHistory",
+      "weight",
       "surface",
       "weather",
+      "jockey",
+      "trainer",
       "jockeyWinRate",
       "trainerWinRate",
       "jockeyTrainerComboRate",

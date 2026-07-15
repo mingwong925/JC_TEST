@@ -17,6 +17,7 @@ export type HorsePrediction = {
   oddsScore?: number;
   jockeyChangeScore?: number;
   drawHistoryScore?: number;
+  carryWeightScore?: number;
   surfaceScore?: number;
   weatherImpactScore?: number;
   jockeyWinRate?: number;
@@ -716,6 +717,9 @@ function resolveHorseNameZh(entry: HorsePrediction): string | undefined {
 
 function buildTopFactors(entry: HorsePrediction): string[] {
   const metrics = [
+    entry.oddsScore != null
+      ? { name: `賠率強度 ${Math.round(entry.oddsScore * 100)}%`, score: entry.oddsScore }
+      : null,
     entry.recentFormScore != null
       ? { name: `賽績 ${Math.round(entry.recentFormScore * 100)}%`, score: entry.recentFormScore }
       : null,
@@ -727,6 +731,9 @@ function buildTopFactors(entry: HorsePrediction): string[] {
         name: `${entry.drawRangeLabel ?? "1-14檔附近"} ${Math.round(entry.drawHistoryScore * 100)}%`,
         score: entry.drawHistoryScore,
       }
+      : null,
+    entry.carryWeightScore != null
+      ? { name: `負磅優勢 ${Math.round(entry.carryWeightScore * 100)}%`, score: entry.carryWeightScore }
       : null,
     entry.weatherImpactScore != null
       ? { name: `天氣影響 ${Math.round(entry.weatherImpactScore * 100)}%`, score: entry.weatherImpactScore }
@@ -788,6 +795,22 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
     return clamp01((max - value) / (max - min));
   };
 
+  const normalizeDirect = (value: number, min: number, max: number): number => {
+    if (!Number.isFinite(value) || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+      return 0.5;
+    }
+    return clamp01((value - min) / (max - min));
+  };
+
+  const fieldOddsStrength = entries.map((entry) => {
+    const placeOdds = entry.oddsPlace ?? estimatePlaceOddsFromWin(entry.oddsWin);
+    const winImplied = 1 / Math.max(1.01, entry.oddsWin);
+    const placeImplied = 1 / Math.max(1.01, placeOdds);
+    return clamp01(winImplied * 0.65 + placeImplied * 0.35);
+  });
+  const minOddsStrength = Math.min(...fieldOddsStrength);
+  const maxOddsStrength = Math.max(...fieldOddsStrength);
+
   const scored = entries.map((entry) => {
     const form = getRecentFormScore();
     const h2h = getHeadToHeadMetrics(entry, entries);
@@ -798,6 +821,11 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
     const surfaceScore = getSurfaceScore(context?.going);
     const weatherImpactScore = getWeatherImpactScore(entry, context?.weather);
     const carryWeightScore = normalizeInverse(entry.weight, minWeight, maxWeight);
+    const placeOdds = entry.oddsPlace ?? estimatePlaceOddsFromWin(entry.oddsWin);
+    const winImplied = 1 / Math.max(1.01, entry.oddsWin);
+    const placeImplied = 1 / Math.max(1.01, placeOdds);
+    const oddsStrength = clamp01(winImplied * 0.65 + placeImplied * 0.35);
+    const oddsScore = normalizeDirect(oddsStrength, minOddsStrength, maxOddsStrength);
     const jockeyWinRate = getJockeyWinRate(entry);
     const trainerWinRate = getTrainerWinRate(entry);
     const jockeyTrainerComboRate = getJockeyTrainerComboRate(entry);
@@ -809,14 +837,17 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
         );
     const finalScore = Number(
       (
-        withNeutral(form.score) * 0.25 +
-        withNeutral(h2h.score) * 0.15 +
-        withNeutral(jockeyChangeScore) * 0.08 +
-        withNeutral(drawHistoryScore) * 0.18 +
-        withNeutral(carryWeightScore) * 0.12 +
-        withNeutral(surfaceScore) * 0.1 +
+        withNeutral(oddsScore) * 0.3 +
+        withNeutral(form.score) * 0.08 +
+        withNeutral(h2h.score) * 0.04 +
+        withNeutral(jockeyChangeScore) * 0.03 +
+        withNeutral(drawHistoryScore) * 0.16 +
+        withNeutral(carryWeightScore) * 0.13 +
+        withNeutral(surfaceScore) * 0.05 +
         withNeutral(weatherImpactScore) * 0.05 +
-        withNeutral(connectionScore) * 0.07
+        withNeutral(jockeyWinRate) * 0.06 +
+        withNeutral(trainerWinRate) * 0.06 +
+        withNeutral(jockeyTrainerComboRate) * 0.04
       ).toFixed(4),
     );
 
@@ -828,7 +859,9 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
       headToHeadScore: h2h.score == null ? undefined : Number(h2h.score.toFixed(4)),
       jockeyChangeScore,
       drawHistoryScore,
+      carryWeightScore,
       drawRangeLabel,
+      oddsScore,
       surfaceScore,
       weatherImpactScore,
       jockeyWinRate,
