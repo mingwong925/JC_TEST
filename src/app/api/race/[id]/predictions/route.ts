@@ -15,9 +15,6 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     featureSet: [
       "oddsWin",
       "oddsPlace",
-      "recentForm",
-      "headToHead",
-      "jockeyChange",
       "draw",
       "drawHistory",
       "weight",

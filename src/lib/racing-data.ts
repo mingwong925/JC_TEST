@@ -837,17 +837,14 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
         );
     const finalScore = Number(
       (
-        withNeutral(oddsScore) * 0.3 +
-        withNeutral(form.score) * 0.08 +
-        withNeutral(h2h.score) * 0.04 +
-        withNeutral(jockeyChangeScore) * 0.03 +
-        withNeutral(drawHistoryScore) * 0.16 +
-        withNeutral(carryWeightScore) * 0.13 +
-        withNeutral(surfaceScore) * 0.05 +
-        withNeutral(weatherImpactScore) * 0.05 +
-        withNeutral(jockeyWinRate) * 0.06 +
-        withNeutral(trainerWinRate) * 0.06 +
-        withNeutral(jockeyTrainerComboRate) * 0.04
+        withNeutral(oddsScore) * 0.2 +
+        withNeutral(jockeyWinRate) * 0.2 +
+        withNeutral(trainerWinRate) * 0.2 +
+        withNeutral(jockeyTrainerComboRate) * 0.1 +
+        withNeutral(drawHistoryScore) * 0.12 +
+        withNeutral(carryWeightScore) * 0.08 +
+        withNeutral(surfaceScore) * 0.06 +
+        withNeutral(weatherImpactScore) * 0.04
       ).toFixed(4),
     );
 
