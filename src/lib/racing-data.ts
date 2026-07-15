@@ -774,15 +774,30 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
 
   const withNeutral = (value: number | undefined): number => (value == null ? 0.5 : value);
 
+  const draws = entries.map((entry) => entry.draw).filter((value) => Number.isFinite(value));
+  const weights = entries.map((entry) => entry.weight).filter((value) => Number.isFinite(value));
+  const minDraw = draws.length > 0 ? Math.min(...draws) : 1;
+  const maxDraw = draws.length > 0 ? Math.max(...draws) : 14;
+  const minWeight = weights.length > 0 ? Math.min(...weights) : 113;
+  const maxWeight = weights.length > 0 ? Math.max(...weights) : 135;
+
+  const normalizeInverse = (value: number, min: number, max: number): number => {
+    if (!Number.isFinite(value) || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+      return 0.5;
+    }
+    return clamp01((max - value) / (max - min));
+  };
+
   const scored = entries.map((entry) => {
     const form = getRecentFormScore();
     const h2h = getHeadToHeadMetrics(entry, entries);
     const jockeyChanged = Boolean(form.previousJockey && form.previousJockey !== entry.jockey);
     const jockeyChangeScore = jockeyChanged ? 0.45 : 0.55;
-    const drawHistoryScore = getDrawHistoryScore(entry);
+    const drawHistoryScore = getDrawHistoryScore(entry) ?? normalizeInverse(entry.draw, minDraw, maxDraw);
     const drawRangeLabel = getDrawRangeLabel(entry);
     const surfaceScore = getSurfaceScore(context?.going);
     const weatherImpactScore = getWeatherImpactScore(entry, context?.weather);
+    const carryWeightScore = normalizeInverse(entry.weight, minWeight, maxWeight);
     const jockeyWinRate = getJockeyWinRate(entry);
     const trainerWinRate = getTrainerWinRate(entry);
     const jockeyTrainerComboRate = getJockeyTrainerComboRate(entry);
@@ -797,10 +812,11 @@ function applyFeatureModel(entries: HorsePrediction[], context?: ModelContext): 
         withNeutral(form.score) * 0.25 +
         withNeutral(h2h.score) * 0.15 +
         withNeutral(jockeyChangeScore) * 0.08 +
-        withNeutral(drawHistoryScore) * 0.12 +
+        withNeutral(drawHistoryScore) * 0.18 +
+        withNeutral(carryWeightScore) * 0.12 +
         withNeutral(surfaceScore) * 0.1 +
         withNeutral(weatherImpactScore) * 0.05 +
-        withNeutral(connectionScore) * 0.25
+        withNeutral(connectionScore) * 0.07
       ).toFixed(4),
     );
 
