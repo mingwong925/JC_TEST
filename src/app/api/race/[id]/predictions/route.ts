@@ -11,7 +11,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
 
   return NextResponse.json({
     raceId: id,
-    modelVersion: "feature-v4-all-signals",
+    modelVersion: "feature-v4-fixed-40-30-20-10",
     featureSet: [
       "oddsWin",
       "oddsPlace",

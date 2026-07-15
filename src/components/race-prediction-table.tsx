@@ -7,8 +7,6 @@ type Props = {
   predictions: HorsePrediction[];
 };
 
-type Confidence = "low" | "medium" | "high";
-
 type RankingStat = {
   numFirst?: number;
   numStarts?: number;
@@ -95,12 +93,6 @@ const TRAINER_NAME_ALIAS: Record<string, string> = {
   "J Size": "蔡約翰",
   "F C Lor": "羅富全",
 };
-
-function confidenceClass(value: Confidence) {
-  if (value === "high") return "pill high";
-  if (value === "medium") return "pill medium";
-  return "pill low";
-}
 
 function formatPercent(value?: number): string {
   if (value == null) {
@@ -339,7 +331,6 @@ query rw_GetTrainerRanking($season: String) {
             <th>騎師本季勝率</th>
             <th>練馬師本季勝率</th>
             <th>騎練本季勝率</th>
-            <th>信心等級</th>
             <th>主要因子</th>
           </tr>
         </thead>
@@ -359,9 +350,6 @@ query rw_GetTrainerRanking($season: String) {
               <td>{formatPercent(item.jockeyRate)}</td>
               <td>{formatPercent(item.trainerRate)}</td>
               <td>{formatPercent(item.comboRate)}</td>
-              <td>
-                <span className={confidenceClass(item.confidence)}>{item.confidence}</span>
-              </td>
               <td>{item.factors.join(" / ")}</td>
             </tr>
           ))}
